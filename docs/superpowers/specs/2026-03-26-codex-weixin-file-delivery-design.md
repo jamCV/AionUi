@@ -582,7 +582,7 @@ This section must be updated after each completed phase.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Phase 0 design doc | In Progress | This document is being written on 2026-03-26 |
+| Phase 0 design doc | Completed | English spec written locally and synced remotely on 2026-03-26 |
 | Phase 1 backend delivery service | Not Started | No AionUi-native reusable service exists yet |
 | Phase 2 Codex tool wiring | Not Started | No current Weixin-only delivery tool exposed to Codex |
 | Phase 3 intent gate | Not Started | Natural-language explicit-send gate not implemented |
