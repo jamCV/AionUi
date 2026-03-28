@@ -31,7 +31,25 @@ export type {
   IConversationRow,
   IMessageRow,
   IConfigRow,
+  TurnReviewStatus,
+  TurnFileAction,
+  TurnSnapshotRow,
+  TurnSnapshotFileRow,
+  TurnSnapshotSummary,
+  TurnSnapshotFile,
+  TurnSnapshot,
+  CreateTurnSnapshotFileInput,
+  CreateTurnSnapshotInput,
 } from './types';
 
 // Re-export conversion functions
-export { conversationToRow, rowToConversation, messageToRow, rowToMessage } from './types';
+export {
+  conversationToRow,
+  rowToConversation,
+  messageToRow,
+  rowToMessage,
+  turnSnapshotToRow,
+  turnSnapshotFileToRow,
+  rowToTurnSnapshotSummary,
+  rowToTurnSnapshotFile,
+} from './types';

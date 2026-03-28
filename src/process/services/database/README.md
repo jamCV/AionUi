@@ -272,7 +272,12 @@ await importDatabaseFromJSON(data);
 
 ### 版本管理
 
-数据库Schema有版本控制，当前版本为 **v4**。每个版本升级都有对应的迁移脚本。
+数据库 Schema 有版本控制，当前版本为 **v18**。每个版本升级都有对应的迁移脚本。
+
+`v18` 新增了 turn snapshot 持久化表：
+
+- `conversation_turns`：保存 turn 级元数据、review 状态、completion source
+- `conversation_turn_files`：保存每个受影响文件的 before / after / diff / revert 能力
 
 ```typescript
 import { getDatabase } from '@/process/database/export';
@@ -303,11 +308,13 @@ const isV2Applied = db.isMigrationApplied(2);
 
 #### 当前迁移列表
 
-- **v1**: 初始Schema（用户、会话、消息、配置）
-- **v2**: 添加性能索引（复合索引优化查询）
-- **v3**: ~~添加全文搜索支持~~ (已跳过，不创建FTS表)
-- **v4**: 添加用户偏好设置表
-- **v5**: 删除FTS表（清理v3遗留的表，确保数据库结构一致）
+以下只列出部分关键迁移，完整列表请直接查看 `migrations.ts`：
+
+- **v1**: 初始 Schema（用户、会话、消息）
+- **v9**: 添加 `cron_jobs` 表
+- **v16**: 添加 `remote_agents` 表与 `remote` 会话类型
+- **v17**: 为 `remote_agents` 添加设备身份字段
+- **v18**: 添加 `conversation_turns` / `conversation_turn_files` 两张 turn snapshot 表
 
 ### 如何添加新迁移
 

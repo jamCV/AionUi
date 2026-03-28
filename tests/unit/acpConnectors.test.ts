@@ -256,6 +256,17 @@ describe('connectCodex - Windows diagnostics', () => {
     expect(setup).toHaveBeenCalledTimes(1);
     expect(cleanup).not.toHaveBeenCalled();
   });
+
+  it('does not inject legacy sandbox_mode shell config into codex-acp startup args', async () => {
+    const setup = vi.fn().mockResolvedValue(undefined);
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+
+    await connectCodex('/cwd', { setup, cleanup });
+
+    const [, args] = mockSpawn.mock.calls[0];
+    expect(args).not.toEqual(expect.arrayContaining(['-c']));
+    expect(args).not.toEqual(expect.arrayContaining(['sandbox_mode="danger-full-access"']));
+  });
 });
 
 describe('connectCodex - Windows package selection', () => {

@@ -38,5 +38,17 @@
     "yesAlwaysAllowTool": "Evet, \"{{serverName}}\" sunucusundan \"{{toolName}}\" aracına her zaman izin ver",
     "yesAlwaysAllowServer": "Evet, \"{{serverName}}\" sunucusundaki tüm araçlara her zaman izin ver",
     "no": "Hayır (esc)"
+  },
+  "turnSnapshot": {
+    "keep": "Bu Turu Koru",
+    "revert": "Bu Turu Geri Al",
+    "kept": "Korundu",
+    "reverted": "Geri alındı",
+    "conflict": "Çakışma algılandı",
+    "unsupported": "Geri alma kullanılamıyor",
+    "keepFailed": "Bu tur korunamadı",
+    "revertFailed": "Bu tur geri alınamadı",
+    "keepSuccess": "Tur korundu",
+    "revertSuccess": "Tur geri alındı"
   }
 }

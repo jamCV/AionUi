@@ -12,9 +12,12 @@ import type {
   AgentMessageChunkUpdate,
   AgentThoughtChunkUpdate,
   PlanUpdate,
+  ToolCallContentItem,
+  ToolCallNormalizedDiffItem,
   ToolCallUpdate,
   ToolCallUpdateStatus,
 } from '@/common/types/acpTypes';
+import { createTwoFilesPatch } from 'diff';
 
 /**
  * Adapter class to convert ACP messages to AionUI message format
@@ -188,6 +191,7 @@ export class AcpAdapter {
 
   private createOrUpdateAcpToolCall(update: ToolCallUpdate): IMessageAcpToolCall | null {
     const toolCallId = update.update.toolCallId;
+    const normalizedDiffs = this.normalizeToolCallDiffs(update.update.content);
 
     // 使用 toolCallId 作为 msg_id，确保同一个工具调用的消息可以被合并
     const baseMessage = {
@@ -201,7 +205,13 @@ export class AcpAdapter {
     const acpToolCallMessage: IMessageAcpToolCall = {
       ...baseMessage,
       type: 'acp_tool_call',
-      content: update, // 直接使用 ToolCallUpdate 作为 content
+      content: {
+        ...update,
+        update: {
+          ...update.update,
+          normalizedDiffs,
+        },
+      }, // 直接使用 ToolCallUpdate 作为 content
     };
 
     this.activeToolCalls.set(toolCallId, acpToolCallMessage);
@@ -232,6 +242,7 @@ export class AcpAdapter {
         ...existingMessage.content.update,
         status: toolCallData.status,
         content: toolCallData.content || existingMessage.content.update.content,
+        normalizedDiffs: this.normalizeToolCallDiffs(toolCallData.content || existingMessage.content.update.content),
         // Merge rawInput if present in the update (complete input after streaming)
         rawInput: toolCallData.rawInput || existingMessage.content.update.rawInput,
       },
@@ -257,6 +268,36 @@ export class AcpAdapter {
 
     // Return the updated message with same msg_id - composeMessage will merge it with existing
     return updatedMessage;
+  }
+
+  private normalizeToolCallDiffs(content?: ToolCallContentItem[]): ToolCallNormalizedDiffItem[] | undefined {
+    if (!content || content.length === 0) {
+      return undefined;
+    }
+
+    const normalizedDiffs = content
+      .filter(
+        (item): item is ToolCallContentItem & { type: 'diff'; path: string } => item.type === 'diff' && !!item.path
+      )
+      .map((item) => {
+        const beforeExists = item.oldText !== null && item.oldText !== undefined;
+        const afterExists = item.newText !== null && item.newText !== undefined;
+        const oldFileName = beforeExists ? item.path : '/dev/null';
+        const newFileName = afterExists ? item.path : '/dev/null';
+        const action = beforeExists ? (afterExists ? 'update' : 'delete') : 'create';
+
+        return {
+          path: item.path,
+          action,
+          beforeExists,
+          afterExists,
+          unifiedDiff: createTwoFilesPatch(oldFileName, newFileName, item.oldText ?? '', item.newText ?? '', '', '', {
+            context: 3,
+          }),
+        } satisfies ToolCallNormalizedDiffItem;
+      });
+
+    return normalizedDiffs.length > 0 ? normalizedDiffs : undefined;
   }
 
   /**

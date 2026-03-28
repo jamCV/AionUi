@@ -40,6 +40,8 @@ export interface FileChangesPanelProps {
   onDiffClick?: (file: FileChangeItem) => void;
   /** 额外的类名 / Additional class name */
   className?: string;
+  /** 标题区域额外内容 / Extra header content */
+  headerExtra?: React.ReactNode;
 }
 
 /**
@@ -56,6 +58,7 @@ const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
   onFileClick,
   onDiffClick,
   className,
+  headerExtra,
 }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -83,13 +86,20 @@ const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
           {/* 标题 / Title */}
           <span className='text-14px text-t-primary font-medium'>{title}</span>
         </div>
-        {/* 展开/收起箭头 / Expand/collapse arrow */}
-        <Down
-          theme='outline'
-          size='16'
-          fill={iconColors.secondary}
-          className={classNames('transition-transform duration-200', expanded && 'rotate-180')}
-        />
+        <div className='flex items-center gap-8px shrink-0'>
+          {headerExtra && (
+            <div className='flex items-center gap-8px' onClick={(event) => event.stopPropagation()}>
+              {headerExtra}
+            </div>
+          )}
+          {/* 展开/收起箭头 / Expand/collapse arrow */}
+          <Down
+            theme='outline'
+            size='16'
+            fill={iconColors.secondary}
+            className={classNames('transition-transform duration-200', expanded && 'rotate-180')}
+          />
+        </div>
       </div>
 
       {/* 文件列表 / File list */}

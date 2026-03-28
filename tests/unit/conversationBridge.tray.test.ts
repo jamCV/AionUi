@@ -39,7 +39,7 @@ const mockWorkerTaskManager = {
 
 const registerMocks = () => {
   vi.doMock('@/agent/gemini', () => ({
-    GeminiAgent: class {},
+    GeminiAgent: {},
     GeminiApprovalStore: { getInstance: vi.fn(() => ({})) },
   }));
 
@@ -69,6 +69,12 @@ const registerMocks = () => {
         getSlashCommands: createCommand('conversation.getSlashCommands'),
         sendMessage: createCommand('conversation.sendMessage'),
         warmup: createCommand('conversation.warmup'),
+        turnSnapshot: {
+          list: createCommand('conversation.turnSnapshot.list'),
+          get: createCommand('conversation.turnSnapshot.get'),
+          keep: createCommand('conversation.turnSnapshot.keep'),
+          revert: createCommand('conversation.turnSnapshot.revert'),
+        },
         responseStream: { emit: vi.fn() },
         listChanged: { emit: vi.fn() },
         confirmation: {
@@ -84,6 +90,9 @@ const registerMocks = () => {
 
   vi.doMock('@process/utils/initStorage', () => ({
     getSkillsDir: vi.fn(() => '/mock/skills'),
+    getBuiltinSkillsCopyDir: vi.fn(() => '/mock/skills/_builtin'),
+    getSystemDir: vi.fn(() => ({ cacheDir: '/mock/cache', workDir: '/mock/work' })),
+    ProcessConfig: { get: vi.fn(async () => undefined) },
     ProcessChat: { get: vi.fn(async () => []) },
   }));
 
@@ -111,7 +120,10 @@ const registerMocks = () => {
 
 const getProvider = async (key: string): Promise<Provider> => {
   const mod = await import('@process/bridge/conversationBridge');
-  mod.initConversationBridge(mockConversationService as any, mockWorkerTaskManager as any);
+  mod.initConversationBridge(
+    mockConversationService as unknown as Parameters<typeof mod.initConversationBridge>[0],
+    mockWorkerTaskManager as unknown as Parameters<typeof mod.initConversationBridge>[1]
+  );
 
   const provider = handlers[key];
   if (!provider) {

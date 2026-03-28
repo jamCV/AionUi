@@ -103,6 +103,99 @@ export interface IConfigRow {
   updated_at: number;
 }
 
+export type TurnReviewStatus = 'pending' | 'kept' | 'reverted' | 'conflict' | 'unsupported' | 'failed';
+
+export type TurnFileAction = 'create' | 'update' | 'delete';
+
+export type TurnSnapshotRow = {
+  id: string;
+  conversation_id: string;
+  backend: string;
+  request_msg_id: string | null;
+  started_at: number;
+  completed_at: number;
+  completion_signal: string;
+  completion_source: string | null;
+  review_status: TurnReviewStatus;
+  file_count: number;
+  source_message_ids: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TurnSnapshotFileRow = {
+  id: string;
+  turn_id: string;
+  conversation_id: string;
+  file_path: string;
+  file_name: string;
+  action: TurnFileAction;
+  before_exists: number;
+  after_exists: number;
+  before_hash: string | null;
+  after_hash: string | null;
+  before_content: string | null;
+  after_content: string | null;
+  unified_diff: string;
+  source_message_ids: string;
+  revert_supported: number;
+  revert_error: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TurnSnapshotSummary = {
+  id: string;
+  conversationId: string;
+  backend: string;
+  requestMessageId?: string;
+  startedAt: number;
+  completedAt: number;
+  completionSignal: string;
+  completionSource?: string;
+  reviewStatus: TurnReviewStatus;
+  fileCount: number;
+  sourceMessageIds: string[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type TurnSnapshotFile = {
+  id: string;
+  turnId: string;
+  conversationId: string;
+  filePath: string;
+  fileName: string;
+  action: TurnFileAction;
+  beforeExists: boolean;
+  afterExists: boolean;
+  beforeHash?: string;
+  afterHash?: string;
+  beforeContent?: string;
+  afterContent?: string;
+  unifiedDiff: string;
+  sourceMessageIds: string[];
+  revertSupported: boolean;
+  revertError?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type TurnSnapshot = TurnSnapshotSummary & {
+  files: TurnSnapshotFile[];
+};
+
+export type CreateTurnSnapshotFileInput = Omit<TurnSnapshotFile, 'createdAt' | 'updatedAt'> & {
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type CreateTurnSnapshotInput = Omit<TurnSnapshot, 'fileCount' | 'createdAt' | 'updatedAt' | 'files'> & {
+  createdAt?: number;
+  updatedAt?: number;
+  files: CreateTurnSnapshotFileInput[];
+};
+
 /**
  * ======================
  * 类型转换函数
@@ -232,6 +325,106 @@ export function rowToMessage(row: IMessageRow): TMessage {
     status: row.status,
     createdAt: row.created_at,
   } as TMessage;
+}
+
+const parseStringArray = (rawValue: string): string[] => {
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue);
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+    return parsedValue.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+};
+
+export function turnSnapshotToRow(snapshot: CreateTurnSnapshotInput): TurnSnapshotRow {
+  const createdAt = snapshot.createdAt ?? Date.now();
+  const updatedAt = snapshot.updatedAt ?? createdAt;
+
+  return {
+    id: snapshot.id,
+    conversation_id: snapshot.conversationId,
+    backend: snapshot.backend,
+    request_msg_id: snapshot.requestMessageId ?? null,
+    started_at: snapshot.startedAt,
+    completed_at: snapshot.completedAt,
+    completion_signal: snapshot.completionSignal,
+    completion_source: snapshot.completionSource ?? null,
+    review_status: snapshot.reviewStatus,
+    file_count: snapshot.files.length,
+    source_message_ids: JSON.stringify(snapshot.sourceMessageIds),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export function turnSnapshotFileToRow(file: CreateTurnSnapshotFileInput): TurnSnapshotFileRow {
+  const createdAt = file.createdAt ?? Date.now();
+  const updatedAt = file.updatedAt ?? createdAt;
+
+  return {
+    id: file.id,
+    turn_id: file.turnId,
+    conversation_id: file.conversationId,
+    file_path: file.filePath,
+    file_name: file.fileName,
+    action: file.action,
+    before_exists: file.beforeExists ? 1 : 0,
+    after_exists: file.afterExists ? 1 : 0,
+    before_hash: file.beforeHash ?? null,
+    after_hash: file.afterHash ?? null,
+    before_content: file.beforeContent ?? null,
+    after_content: file.afterContent ?? null,
+    unified_diff: file.unifiedDiff,
+    source_message_ids: JSON.stringify(file.sourceMessageIds),
+    revert_supported: file.revertSupported ? 1 : 0,
+    revert_error: file.revertError ?? null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export function rowToTurnSnapshotSummary(row: TurnSnapshotRow): TurnSnapshotSummary {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    backend: row.backend,
+    requestMessageId: row.request_msg_id ?? undefined,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    completionSignal: row.completion_signal,
+    completionSource: row.completion_source ?? undefined,
+    reviewStatus: row.review_status,
+    fileCount: row.file_count,
+    sourceMessageIds: parseStringArray(row.source_message_ids),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function rowToTurnSnapshotFile(row: TurnSnapshotFileRow): TurnSnapshotFile {
+  return {
+    id: row.id,
+    turnId: row.turn_id,
+    conversationId: row.conversation_id,
+    filePath: row.file_path,
+    fileName: row.file_name,
+    action: row.action,
+    beforeExists: row.before_exists === 1,
+    afterExists: row.after_exists === 1,
+    beforeHash: row.before_hash ?? undefined,
+    afterHash: row.after_hash ?? undefined,
+    beforeContent: row.before_content ?? undefined,
+    afterContent: row.after_content ?? undefined,
+    unifiedDiff: row.unified_diff,
+    sourceMessageIds: parseStringArray(row.source_message_ids),
+    revertSupported: row.revert_supported === 1,
+    revertError: row.revert_error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 /**

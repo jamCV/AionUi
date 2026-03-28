@@ -17,6 +17,7 @@ import type {
 import { ACP_BACKENDS_ALL } from '@/common/types/acpTypes';
 import { ExtensionRegistry } from '@process/extensions';
 import { getDatabase } from '@process/services/database';
+import { parseCompletionSource, turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { addMessage, addOrUpdateMessage, nextTickToLocalFinish } from '@process/utils/message';
 import { handlePreviewOpenEvent } from '@process/utils/previewUtils';
@@ -416,6 +417,8 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         onSignalEvent: async (v) => {
           // Flush buffered text chunks before handling turn-level signals
           this.flushBufferedStreamTextMessages();
+          let shouldCompleteTurn = v.type === 'finish';
+          const completionSource = parseCompletionSource(v.data);
 
           // 仅发送信号到前端，不更新消息列表
           if (v.type === 'acp_permission') {
@@ -476,6 +479,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
             });
             // Send collected responses back to AI agent so it can continue
             if (collectedResponses.length > 0 && this.agent) {
+              shouldCompleteTurn = false;
               const feedbackMessage = `[System Response]\n${collectedResponses.join('\n')}`;
               await this.agent.sendMessage({ content: feedbackMessage });
             }
@@ -491,6 +495,14 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
             ...(v as any),
             conversation_id: this.conversation_id,
           });
+
+          if (shouldCompleteTurn) {
+            void turnSnapshotCoordinator.completeTurn({
+              conversationId: this.conversation_id,
+              completionSignal: v.type,
+              completionSource,
+            });
+          }
         },
       });
       return this.agent.start().then(async () => {

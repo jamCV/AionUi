@@ -230,7 +230,7 @@ describe('AcpAgent.cancelPrompt', () => {
       expect.objectContaining({
         type: 'finish',
         conversation_id: 'test-agent',
-        data: null,
+        data: { completionSource: 'cancel' },
       })
     );
   });

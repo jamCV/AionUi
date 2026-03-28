@@ -856,13 +856,80 @@ const migration_v17: IMigration = {
 };
 
 /**
+ * Migration v17 -> v18: Add turn snapshot tables
+ */
+const migration_v18: IMigration = {
+  version: 18,
+  name: 'Add conversation turn snapshot tables',
+  up: (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS conversation_turns (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      backend TEXT NOT NULL,
+      request_msg_id TEXT,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER NOT NULL,
+      completion_signal TEXT NOT NULL,
+      completion_source TEXT,
+      review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
+      file_count INTEGER NOT NULL DEFAULT 0,
+      source_message_ids TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )`);
+
+    db.exec(`CREATE TABLE IF NOT EXISTS conversation_turn_files (
+      id TEXT PRIMARY KEY,
+      turn_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
+      before_exists INTEGER NOT NULL,
+      after_exists INTEGER NOT NULL,
+      before_hash TEXT,
+      after_hash TEXT,
+      before_content TEXT,
+      after_content TEXT,
+      unified_diff TEXT NOT NULL,
+      source_message_ids TEXT NOT NULL,
+      revert_supported INTEGER NOT NULL DEFAULT 1,
+      revert_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (turn_id) REFERENCES conversation_turns(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )`);
+
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, completed_at DESC)'
+    );
+    db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_turn_files_conversation_path ON conversation_turn_files(conversation_id, file_path)'
+    );
+
+    console.log('[Migration v18] Added turn snapshot tables');
+  },
+  down: (db) => {
+    db.exec('DROP INDEX IF EXISTS idx_turn_files_conversation_path');
+    db.exec('DROP INDEX IF EXISTS idx_turn_files_turn_id');
+    db.exec('DROP INDEX IF EXISTS idx_turns_conversation_completed');
+    db.exec('DROP TABLE IF EXISTS conversation_turn_files');
+    db.exec('DROP TABLE IF EXISTS conversation_turns');
+    console.log('[Migration v18] Rolled back: Removed turn snapshot tables');
+  },
+};
+
+/**
  * All migrations in order
  */
 // prettier-ignore
 export const ALL_MIGRATIONS: IMigration[] = [
   migration_v1, migration_v2, migration_v3, migration_v4, migration_v5, migration_v6,
   migration_v7, migration_v8, migration_v9, migration_v10, migration_v11, migration_v12,
-  migration_v13, migration_v14, migration_v15, migration_v16, migration_v17,
+  migration_v13, migration_v14, migration_v15, migration_v16, migration_v17, migration_v18,
 ];
 
 /**

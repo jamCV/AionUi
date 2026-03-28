@@ -3,7 +3,10 @@
  * Configuration for React component and hook tests using jsdom
  */
 
-import '@testing-library/jest-dom/vitest';
+import * as matchers from '@testing-library/jest-dom/matchers';
+import { expect } from 'vitest';
+
+expect.extend(matchers);
 
 // Make this a module
 

@@ -4,6 +4,20 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getPath: vi.fn(() => '/tm
 
 // Capture provider handlers so tests can invoke them directly
 const handlers: Record<string, (...args: any[]) => any> = {};
+const { turnSnapshotServiceMock } = vi.hoisted(() => ({
+  turnSnapshotServiceMock: {
+    listTurnSnapshots: vi.fn(async () => []),
+    getTurnSnapshot: vi.fn(async () => undefined),
+    keepTurn: vi.fn(async () => ({ success: true, turnId: 'turn-1', reviewStatus: 'kept' as const })),
+    revertTurn: vi.fn(async () => ({
+      success: true,
+      turnId: 'turn-1',
+      status: 'reverted' as const,
+      reviewStatus: 'reverted' as const,
+    })),
+  },
+}));
+
 function makeChannel(name: string) {
   return {
     provider: vi.fn((fn: (...args: any[]) => any) => {
@@ -31,6 +45,12 @@ vi.mock('../../src/common', () => ({
       getWorkspace: makeChannel('getWorkspace'),
       responseSearchWorkSpace: makeChannel('responseSearchWorkSpace'),
       warmup: makeChannel('warmup'),
+      turnSnapshot: {
+        list: makeChannel('turnSnapshot.list'),
+        get: makeChannel('turnSnapshot.get'),
+        keep: makeChannel('turnSnapshot.keep'),
+        revert: makeChannel('turnSnapshot.revert'),
+      },
       confirmation: {
         confirm: makeChannel('confirmation.confirm'),
         list: makeChannel('confirmation.list'),
@@ -48,11 +68,18 @@ vi.mock('../../src/common', () => ({
 
 vi.mock('../../src/process/utils/initStorage', () => ({
   ProcessChat: { get: vi.fn(async () => []) },
+  ProcessConfig: { get: vi.fn(async () => undefined) },
   getSkillsDir: vi.fn(() => '/skills'),
+  getBuiltinSkillsCopyDir: vi.fn(() => '/skills/_builtin'),
+  getSystemDir: vi.fn(() => ({ cacheDir: '/tmp/cache', workDir: '/tmp/work' })),
 }));
 
 vi.mock('../../src/process/bridge/migrationUtils', () => ({
   migrateConversationToDatabase: vi.fn(async () => {}),
+}));
+
+vi.mock('../../src/process/bridge/services/TurnSnapshotService', () => ({
+  turnSnapshotService: turnSnapshotServiceMock,
 }));
 
 vi.mock('../../src/agent/gemini', () => ({
@@ -114,6 +141,15 @@ describe('conversationBridge', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    turnSnapshotServiceMock.listTurnSnapshots.mockResolvedValue([]);
+    turnSnapshotServiceMock.getTurnSnapshot.mockResolvedValue(undefined);
+    turnSnapshotServiceMock.keepTurn.mockResolvedValue({ success: true, turnId: 'turn-1', reviewStatus: 'kept' });
+    turnSnapshotServiceMock.revertTurn.mockResolvedValue({
+      success: true,
+      turnId: 'turn-1',
+      status: 'reverted',
+      reviewStatus: 'reverted',
+    });
     // Re-register providers by re-initializing the bridge
     service = makeService();
     taskManager = makeTaskManager();
@@ -286,6 +322,85 @@ describe('conversationBridge', () => {
       await expect(handler({ conversation_id: 'failing-id' })).resolves.toBeUndefined();
 
       expect(taskManager.getOrBuildTask).toHaveBeenCalledWith('failing-id');
+    });
+  });
+
+  describe('turnSnapshot providers', () => {
+    it('lists snapshots for a conversation', async () => {
+      const snapshots = [
+        {
+          id: 'turn-1',
+          conversationId: 'c1',
+          backend: 'acp:codex',
+          startedAt: 1,
+          completedAt: 2,
+          completionSignal: 'finish',
+          reviewStatus: 'pending',
+          fileCount: 1,
+          sourceMessageIds: ['m1'],
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ];
+      turnSnapshotServiceMock.listTurnSnapshots.mockResolvedValue(snapshots);
+
+      const result = await handlers['turnSnapshot.list']({ conversation_id: 'c1', limit: 10 });
+
+      expect(turnSnapshotServiceMock.listTurnSnapshots).toHaveBeenCalledWith('c1', 10);
+      expect(result).toEqual(snapshots);
+    });
+
+    it('gets a single turn snapshot', async () => {
+      const snapshot = {
+        id: 'turn-1',
+        conversationId: 'c1',
+        backend: 'acp:codex',
+        startedAt: 1,
+        completedAt: 2,
+        completionSignal: 'finish',
+        reviewStatus: 'pending',
+        fileCount: 1,
+        sourceMessageIds: ['m1'],
+        createdAt: 2,
+        updatedAt: 2,
+        files: [],
+      };
+      turnSnapshotServiceMock.getTurnSnapshot.mockResolvedValue(snapshot);
+
+      const result = await handlers['turnSnapshot.get']({ turnId: 'turn-1' });
+
+      expect(turnSnapshotServiceMock.getTurnSnapshot).toHaveBeenCalledWith('turn-1');
+      expect(result).toEqual(snapshot);
+    });
+
+    it('keeps a turn snapshot through the service', async () => {
+      const keepResult = {
+        success: true,
+        turnId: 'turn-1',
+        reviewStatus: 'kept' as const,
+      };
+      turnSnapshotServiceMock.keepTurn.mockResolvedValue(keepResult);
+
+      const result = await handlers['turnSnapshot.keep']({ turnId: 'turn-1' });
+
+      expect(turnSnapshotServiceMock.keepTurn).toHaveBeenCalledWith('turn-1');
+      expect(result).toEqual(keepResult);
+    });
+
+    it('reverts a turn snapshot through the service', async () => {
+      const revertResult = {
+        success: false,
+        turnId: 'turn-1',
+        status: 'conflict' as const,
+        reviewStatus: 'conflict' as const,
+        conflicts: [{ filePath: 'src/example.ts', expectedExists: true, actualExists: true }],
+      };
+      turnSnapshotServiceMock.revertTurn.mockResolvedValue(revertResult);
+
+      const result = await handlers['turnSnapshot.revert']({ turnId: 'turn-1' });
+
+      expect(turnSnapshotServiceMock.revertTurn).toHaveBeenCalledWith('turn-1');
+      expect(result).toEqual(revertResult);
     });
   });
 });

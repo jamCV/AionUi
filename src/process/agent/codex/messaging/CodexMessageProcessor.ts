@@ -9,6 +9,7 @@ import type { TMessage } from '@/common/chat/chatLib';
 import type { CodexEventMsg } from '@/common/types/codex/types';
 import type { ICodexMessageEmitter } from '@process/agent/codex/messaging/CodexMessageEmitter';
 import { ERROR_CODES, globalErrorService } from '@process/agent/codex/core/ErrorService';
+import { turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
 import { hasCronCommands } from '@process/task/CronCommandDetector';
 import { processCronInMessage } from '@process/task/MessageMiddleware';
 import { cronBusyGuard } from '@process/services/cron/CronBusyGuard';
@@ -49,10 +50,16 @@ export class CodexMessageProcessor {
         type: 'finish',
         msg_id: uuid(),
         conversation_id: this.conversation_id,
-        data: null,
+        data: { completionSource: 'task_complete' },
       },
       false
     );
+
+    void turnSnapshotCoordinator.completeTurn({
+      conversationId: this.conversation_id,
+      completionSignal: 'finish',
+      completionSource: 'task_complete',
+    });
   }
 
   handleReasoningMessage(

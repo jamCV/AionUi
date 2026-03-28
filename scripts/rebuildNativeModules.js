@@ -193,7 +193,10 @@ function rebuildSingleModule(options) {
 
   const bunxCmd = getBunxCommand();
   const cmdPrefix = getCommandPrefix(platform);
-  const useShell = cmdPrefix.length > 0; // Need shell for vx prefix
+  // "bun x" is a shell fragment rather than a standalone executable path.
+  // When vx is unavailable on Windows, execFileSync("bun x", ...) fails with
+  // "The system cannot find the path specified.", so keep this path on execSync.
+  const useShell = cmdPrefix.length > 0 || bunxCmd.includes(' ');
 
   // For Linux cross-compilation, ALWAYS use prebuild-install
   // because electron-rebuild cannot cross-compile without ARM64 toolchain
@@ -255,14 +258,12 @@ function rebuildSingleModule(options) {
           cwd: moduleRoot,
           env,
           stdio: 'inherit',
-          shell: true,
         });
       } else {
         execFileSync(bunxCmd, prebuildArgs, {
           cwd: moduleRoot,
           env,
           stdio: 'inherit',
-          shell: true,
         });
       }
 
@@ -308,14 +309,12 @@ function rebuildSingleModule(options) {
         cwd: projectRoot,
         env,
         stdio: 'inherit',
-        shell: true,
       });
     } else {
       execFileSync(bunxCmd, rebuildArgs, {
         cwd: projectRoot,
         env,
         stdio: 'inherit',
-        shell: true,
       });
     }
     return true;

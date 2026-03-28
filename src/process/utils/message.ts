@@ -18,7 +18,7 @@ const Cache = new Map<string, ConversationManageWithDB>();
 class ConversationManageWithDB {
   private stack: Array<['insert' | 'accumulate', TMessage]> = [];
   private dbPromise = getDatabase();
-  private timer: NodeJS.Timeout;
+  private timer: NodeJS.Timeout | undefined;
   private savePromise = Promise.resolve();
   constructor(private conversation_id: string) {
     this.savePromise = this.dbPromise.then((db) => ensureConversationExists(db, this.conversation_id)).catch(() => {});
@@ -39,6 +39,14 @@ class ConversationManageWithDB {
     this.timer = setTimeout(() => {
       this.save2DataBase();
     }, 2000);
+  }
+
+  async drain(): Promise<void> {
+    clearTimeout(this.timer);
+    if (this.stack.length > 0) {
+      this.save2DataBase();
+    }
+    await this.savePromise;
   }
 
   private save2DataBase() {
@@ -132,6 +140,10 @@ export const addOrUpdateMessage = (conversation_id: string, message: TMessage, b
   }
 
   ConversationManageWithDB.get(conversation_id).sync('accumulate', message);
+};
+
+export const drainConversationMessageWrites = async (conversation_id: string): Promise<void> => {
+  await ConversationManageWithDB.get(conversation_id).drain();
 };
 
 /**

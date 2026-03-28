@@ -38,5 +38,17 @@
     "yesAlwaysAllowTool": "是，始终允许来自服务器 \"{{serverName}}\" 的工具 \"{{toolName}}\"",
     "yesAlwaysAllowServer": "是，始终允许来自服务器 \"{{serverName}}\" 的所有工具",
     "no": "否 (esc)"
+  },
+  "turnSnapshot": {
+    "keep": "保留本轮",
+    "revert": "撤销本轮",
+    "kept": "已保留",
+    "reverted": "已撤销",
+    "conflict": "检测到冲突",
+    "unsupported": "暂不支持撤销",
+    "keepFailed": "保留本轮失败",
+    "revertFailed": "撤销本轮失败",
+    "keepSuccess": "已保留本轮",
+    "revertSuccess": "已撤销本轮"
   }
 }

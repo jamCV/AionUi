@@ -637,6 +637,14 @@ export interface ToolCallContentItem {
   newText?: string;
 }
 
+export interface ToolCallNormalizedDiffItem {
+  path: string;
+  action: 'create' | 'update' | 'delete';
+  beforeExists: boolean;
+  afterExists: boolean;
+  unifiedDiff: string;
+}
+
 /** Tool call 位置项类型 / Tool call location item type */
 export interface ToolCallLocationItem {
   path: string;
@@ -652,6 +660,7 @@ export interface ToolCallUpdate extends BaseSessionUpdate {
     kind: 'read' | 'edit' | 'execute';
     rawInput?: Record<string, unknown>;
     content?: ToolCallContentItem[];
+    normalizedDiffs?: ToolCallNormalizedDiffItem[];
     locations?: ToolCallLocationItem[];
   };
 }

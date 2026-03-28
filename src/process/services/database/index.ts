@@ -12,15 +12,31 @@ import path from 'path';
 import { runMigrations as executeMigrations } from './migrations';
 import { CURRENT_DB_VERSION, getDatabaseVersion, initSchema, setDatabaseVersion } from './schema';
 import type {
+  CreateTurnSnapshotInput,
   IConversationRow,
   IMessageRow,
   IPaginatedResult,
   IQueryResult,
+  TurnReviewStatus,
+  TurnSnapshot,
+  TurnSnapshotFile,
+  TurnSnapshotFileRow,
+  TurnSnapshotRow,
+  TurnSnapshotSummary,
   IUser,
   TChatConversation,
   TMessage,
 } from './types';
-import { conversationToRow, messageToRow, rowToConversation, rowToMessage } from './types';
+import {
+  conversationToRow,
+  messageToRow,
+  rowToConversation,
+  rowToMessage,
+  rowToTurnSnapshotFile,
+  rowToTurnSnapshotSummary,
+  turnSnapshotFileToRow,
+  turnSnapshotToRow,
+} from './types';
 import type { IMessageSearchItem, IMessageSearchResponse } from '@/common/types/database';
 import type {
   IChannelPluginConfig,
@@ -943,6 +959,224 @@ export class AionUIDatabase {
       return {
         success: false,
         error: error.message,
+      };
+    }
+  }
+
+  createTurnSnapshot(input: CreateTurnSnapshotInput): IQueryResult<boolean> {
+    try {
+      const turnRow = turnSnapshotToRow(input);
+      const fileRows = input.files.map(turnSnapshotFileToRow);
+
+      const insertTurnStatement = this.db.prepare(`
+        INSERT INTO conversation_turns (
+          id,
+          conversation_id,
+          backend,
+          request_msg_id,
+          started_at,
+          completed_at,
+          completion_signal,
+          completion_source,
+          review_status,
+          file_count,
+          source_message_ids,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertFileStatement = this.db.prepare(`
+        INSERT INTO conversation_turn_files (
+          id,
+          turn_id,
+          conversation_id,
+          file_path,
+          file_name,
+          action,
+          before_exists,
+          after_exists,
+          before_hash,
+          after_hash,
+          before_content,
+          after_content,
+          unified_diff,
+          source_message_ids,
+          revert_supported,
+          revert_error,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const insertSnapshot = this.db.transaction(() => {
+        insertTurnStatement.run(
+          turnRow.id,
+          turnRow.conversation_id,
+          turnRow.backend,
+          turnRow.request_msg_id,
+          turnRow.started_at,
+          turnRow.completed_at,
+          turnRow.completion_signal,
+          turnRow.completion_source,
+          turnRow.review_status,
+          turnRow.file_count,
+          turnRow.source_message_ids,
+          turnRow.created_at,
+          turnRow.updated_at
+        );
+
+        for (const fileRow of fileRows) {
+          insertFileStatement.run(
+            fileRow.id,
+            fileRow.turn_id,
+            fileRow.conversation_id,
+            fileRow.file_path,
+            fileRow.file_name,
+            fileRow.action,
+            fileRow.before_exists,
+            fileRow.after_exists,
+            fileRow.before_hash,
+            fileRow.after_hash,
+            fileRow.before_content,
+            fileRow.after_content,
+            fileRow.unified_diff,
+            fileRow.source_message_ids,
+            fileRow.revert_supported,
+            fileRow.revert_error,
+            fileRow.created_at,
+            fileRow.updated_at
+          );
+        }
+      });
+
+      insertSnapshot();
+
+      return {
+        success: true,
+        data: true,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
+      };
+    }
+  }
+
+  getTurnSnapshot(turnId: string): IQueryResult<TurnSnapshot> {
+    try {
+      const turnRow = this.db.prepare('SELECT * FROM conversation_turns WHERE id = ?').get(turnId) as
+        | TurnSnapshotRow
+        | undefined;
+
+      if (!turnRow) {
+        return {
+          success: false,
+          error: 'Turn snapshot not found',
+        };
+      }
+
+      const fileRows = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM conversation_turn_files
+            WHERE turn_id = ?
+            ORDER BY created_at ASC, file_path ASC
+          `
+        )
+        .all(turnId) as TurnSnapshotFileRow[];
+
+      return {
+        success: true,
+        data: {
+          ...rowToTurnSnapshotSummary(turnRow),
+          files: fileRows.map(rowToTurnSnapshotFile),
+        },
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  getTurnSnapshotsByConversation(conversationId: string, limit = 50): IQueryResult<TurnSnapshotSummary[]> {
+    try {
+      const rows = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM conversation_turns
+            WHERE conversation_id = ?
+            ORDER BY completed_at DESC
+            LIMIT ?
+          `
+        )
+        .all(conversationId, limit) as TurnSnapshotRow[];
+
+      return {
+        success: true,
+        data: rows.map(rowToTurnSnapshotSummary),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: [],
+      };
+    }
+  }
+
+  updateTurnReviewStatus(turnId: string, status: TurnReviewStatus): IQueryResult<boolean> {
+    try {
+      const result = this.db
+        .prepare(
+          `
+            UPDATE conversation_turns
+            SET review_status = ?, updated_at = ?
+            WHERE id = ?
+          `
+        )
+        .run(status, Date.now(), turnId);
+
+      return {
+        success: true,
+        data: result.changes > 0,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
+      };
+    }
+  }
+
+  getTurnSnapshotFiles(turnId: string): IQueryResult<TurnSnapshotFile[]> {
+    try {
+      const rows = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM conversation_turn_files
+            WHERE turn_id = ?
+            ORDER BY created_at ASC, file_path ASC
+          `
+        )
+        .all(turnId) as TurnSnapshotFileRow[];
+
+      return {
+        success: true,
+        data: rows.map(rowToTurnSnapshotFile),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: [],
       };
     }
   }

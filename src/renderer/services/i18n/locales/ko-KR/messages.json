@@ -38,5 +38,17 @@
     "yesAlwaysAllowTool": "예, 서버 \"{{serverName}}\"의 도구 \"{{toolName}}\" 항상 허용",
     "yesAlwaysAllowServer": "예, 서버 \"{{serverName}}\"의 모든 도구 항상 허용",
     "no": "아니요 (esc)"
+  },
+  "turnSnapshot": {
+    "keep": "이번 턴 유지",
+    "revert": "이번 턴 되돌리기",
+    "kept": "유지됨",
+    "reverted": "되돌림 완료",
+    "conflict": "충돌이 감지되었습니다",
+    "unsupported": "되돌릴 수 없습니다",
+    "keepFailed": "이번 턴 유지에 실패했습니다",
+    "revertFailed": "이번 턴 되돌리기에 실패했습니다",
+    "keepSuccess": "이번 턴을 유지했습니다",
+    "revertSuccess": "이번 턴을 되돌렸습니다"
   }
 }

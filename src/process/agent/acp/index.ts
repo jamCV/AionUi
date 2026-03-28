@@ -539,7 +539,7 @@ export class AcpAgent {
         type: 'finish',
         conversation_id: this.id,
         msg_id: uuid(),
-        data: null,
+        data: { completionSource: 'cancel' },
       });
     }
   }
@@ -710,7 +710,7 @@ export class AcpAgent {
           type: 'finish',
           conversation_id: this.id,
           msg_id: uuid(),
-          data: null,
+          data: { completionSource: 'send_error' },
         });
       }
 
@@ -1107,7 +1107,7 @@ export class AcpAgent {
         type: 'finish',
         conversation_id: this.id,
         msg_id: uuid(),
-        data: null,
+        data: { completionSource: 'end_turn' },
       });
     }
   }
@@ -1157,7 +1157,7 @@ export class AcpAgent {
         type: 'finish',
         conversation_id: this.id,
         msg_id: uuid(),
-        data: null,
+        data: { completionSource: 'disconnect' },
       });
     }
 

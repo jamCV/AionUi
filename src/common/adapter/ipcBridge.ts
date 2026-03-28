@@ -13,6 +13,12 @@ import type { SlashCommandItem } from '../chat/slash/types';
 import type { IMcpServer, IProvider, TChatConversation, TProviderWithModel, ICssTheme } from '../config/storage';
 import type { PreviewHistoryTarget, PreviewSnapshotInfo } from '../types/preview';
 import type {
+  TurnSnapshot,
+  TurnSnapshotKeepResult,
+  TurnSnapshotRevertResult,
+  TurnSnapshotSummary,
+} from '../types/turnSnapshot';
+import type {
   UpdateCheckRequest,
   UpdateCheckResult,
   UpdateDownloadProgressEvent,
@@ -63,6 +69,14 @@ export const conversation = {
     'conversation.response.search.workspace'
   ),
   reloadContext: bridge.buildProvider<IBridgeResponse, { conversation_id: string }>('conversation.reload-context'),
+  turnSnapshot: {
+    list: bridge.buildProvider<TurnSnapshotSummary[], { conversation_id: string; limit?: number }>(
+      'conversation.turnSnapshot.list'
+    ),
+    get: bridge.buildProvider<TurnSnapshot | null, { turnId: string }>('conversation.turnSnapshot.get'),
+    keep: bridge.buildProvider<TurnSnapshotKeepResult, { turnId: string }>('conversation.turnSnapshot.keep'),
+    revert: bridge.buildProvider<TurnSnapshotRevertResult, { turnId: string }>('conversation.turnSnapshot.revert'),
+  },
   confirmation: {
     add: bridge.buildEmitter<IConfirmation<any> & { conversation_id: string }>('confirmation.add'),
     update: bridge.buildEmitter<IConfirmation<any> & { conversation_id: string }>('confirmation.update'),

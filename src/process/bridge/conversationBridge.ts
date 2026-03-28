@@ -19,6 +19,8 @@ import { prepareFirstMessage } from '../task/agentUtils';
 import { refreshTrayMenu } from '@process/utils/tray';
 import { copyFilesToDirectory, readDirectoryRecursive } from '@process/utils';
 import { computeOpenClawIdentityHash } from '@process/utils/openclawUtils';
+import { turnSnapshotCoordinator } from './services/TurnSnapshotCoordinator';
+import { turnSnapshotService } from './services/TurnSnapshotService';
 import { migrateConversationToDatabase } from './migrationUtils';
 
 const refreshTrayMenuSafely = async (): Promise<void> => {
@@ -28,6 +30,25 @@ const refreshTrayMenuSafely = async (): Promise<void> => {
     console.warn('[conversationBridge] Failed to refresh tray menu:', error);
   }
 };
+
+const resolveTurnBackend = (conversation: TChatConversation | undefined, task: IAgentManager): string | undefined => {
+  if (conversation?.type === 'acp') {
+    return `acp:${String(conversation.extra.backend || 'acp')}`;
+  }
+
+  if (conversation?.type === 'codex') {
+    return 'codex';
+  }
+
+  if (task.type === 'acp' || task.type === 'codex') {
+    return task.type;
+  }
+
+  return undefined;
+};
+
+const isFailedSendResult = (result: unknown): result is { success: false } =>
+  !!result && typeof result === 'object' && 'success' in result && result.success === false;
 
 export function initConversationBridge(
   conversationService: IConversationService,
@@ -128,6 +149,22 @@ export function initConversationBridge(
         msg: e instanceof Error ? e.message : String(e),
       };
     }
+  });
+
+  ipcBridge.conversation.turnSnapshot.list.provider(async ({ conversation_id, limit = 50 }) => {
+    return turnSnapshotService.listTurnSnapshots(conversation_id, limit);
+  });
+
+  ipcBridge.conversation.turnSnapshot.get.provider(async ({ turnId }) => {
+    return (await turnSnapshotService.getTurnSnapshot(turnId)) ?? null;
+  });
+
+  ipcBridge.conversation.turnSnapshot.keep.provider(async ({ turnId }) => {
+    return turnSnapshotService.keepTurn(turnId);
+  });
+
+  ipcBridge.conversation.turnSnapshot.revert.provider(async ({ turnId }) => {
+    return turnSnapshotService.revertTurn(turnId);
   });
 
   ipcBridge.conversation.getAssociateConversation.provider(async ({ conversation_id }) => {
@@ -396,6 +433,7 @@ export function initConversationBridge(
   // Generic sendMessage - dispatches via IAgentManager.sendMessage interface
   ipcBridge.conversation.sendMessage.provider(async ({ conversation_id, files, ...other }) => {
     let task: IAgentManager | undefined;
+    const conversation = await conversationService.getConversation(conversation_id);
     try {
       task = await workerTaskManager.getOrBuildTask(conversation_id);
     } catch (err) {
@@ -440,17 +478,30 @@ export function initConversationBridge(
     }
 
     try {
+      const turnBackend = resolveTurnBackend(conversation, task);
+      if (turnBackend) {
+        await turnSnapshotCoordinator.startTurn({
+          conversationId: conversation_id,
+          backend: turnBackend,
+          requestMessageId: other.msg_id,
+        });
+      }
+
       // Pass unified data — each agent reads the fields it needs from the unknown payload.
       // `content` aliases `input` for ACP/Codex/NanoBot/OpenClaw agents.
       // `agentContent` carries the skill-injected text for OpenClaw (equals `input` when no skills).
-      await task.sendMessage({
+      const result = (await task.sendMessage({
         ...other,
         content: other.input,
         files: workspaceFiles,
         agentContent,
-      });
+      })) as unknown;
+      if (turnBackend && isFailedSendResult(result)) {
+        turnSnapshotCoordinator.discardTurn(conversation_id);
+      }
       return { success: true };
     } catch (err: unknown) {
+      turnSnapshotCoordinator.discardTurn(conversation_id);
       return {
         success: false,
         msg: err instanceof Error ? err.message : String(err),

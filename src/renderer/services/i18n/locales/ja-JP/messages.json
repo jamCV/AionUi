@@ -38,5 +38,17 @@
     "yesAlwaysAllowTool": "はい、サーバー \"{{serverName}}\" のツール \"{{toolName}}\" を常に許可",
     "yesAlwaysAllowServer": "はい、サーバー \"{{serverName}}\" のすべてのツールを常に許可",
     "no": "いいえ (esc)"
+  },
+  "turnSnapshot": {
+    "keep": "このターンを保持",
+    "revert": "このターンを元に戻す",
+    "kept": "保持済み",
+    "reverted": "元に戻しました",
+    "conflict": "競合を検出しました",
+    "unsupported": "元に戻せません",
+    "keepFailed": "このターンの保持に失敗しました",
+    "revertFailed": "このターンの巻き戻しに失敗しました",
+    "keepSuccess": "このターンを保持しました",
+    "revertSuccess": "このターンを元に戻しました"
   }
 }

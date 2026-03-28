@@ -9,6 +9,13 @@ import type { IConversationRepository, PaginatedResult } from './IConversationRe
 import type { TChatConversation } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
 import type { IMessageSearchResponse } from '@/common/types/database';
+import type {
+  CreateTurnSnapshotInput,
+  TurnReviewStatus,
+  TurnSnapshot,
+  TurnSnapshotFile,
+  TurnSnapshotSummary,
+} from './types';
 
 /**
  * SQLite-backed implementation of IConversationRepository.
@@ -91,5 +98,33 @@ export class SqliteConversationRepository implements IConversationRepository {
   async searchMessages(keyword: string, page: number, pageSize: number): Promise<IMessageSearchResponse> {
     const db = await this.getDb();
     return db.searchConversationMessages(keyword, undefined, page, pageSize);
+  }
+
+  async createTurnSnapshot(input: CreateTurnSnapshotInput): Promise<void> {
+    const db = await this.getDb();
+    db.createTurnSnapshot(input);
+  }
+
+  async getTurnSnapshot(turnId: string): Promise<TurnSnapshot | undefined> {
+    const db = await this.getDb();
+    const result = db.getTurnSnapshot(turnId);
+    return result.success ? (result.data ?? undefined) : undefined;
+  }
+
+  async getTurnSnapshotsByConversation(conversationId: string, limit = 50): Promise<TurnSnapshotSummary[]> {
+    const db = await this.getDb();
+    const result = db.getTurnSnapshotsByConversation(conversationId, limit);
+    return result.data ?? [];
+  }
+
+  async updateTurnReviewStatus(turnId: string, status: TurnReviewStatus): Promise<void> {
+    const db = await this.getDb();
+    db.updateTurnReviewStatus(turnId, status);
+  }
+
+  async getTurnSnapshotFiles(turnId: string): Promise<TurnSnapshotFile[]> {
+    const db = await this.getDb();
+    const result = db.getTurnSnapshotFiles(turnId);
+    return result.data ?? [];
   }
 }
