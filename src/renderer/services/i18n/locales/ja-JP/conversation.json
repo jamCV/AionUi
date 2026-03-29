@@ -186,6 +186,30 @@
   "contextUsage": {
     "contextUsed": "コンテキスト使用量"
   },
+  "turnSummary": {
+    "title": "ターンサマリー",
+    "expand": "展開",
+    "collapse": "折りたたむ",
+    "viewChanges": "変更を表示",
+    "waitingForChanges": "このターンのファイル変更を待機しています。",
+    "noFiles": "まだファイル変更はありません",
+    "lifecycle": {
+      "running": "実行中",
+      "completed": "完了",
+      "interrupted": "中断"
+    },
+    "description": {
+      "running": "このターンはまだファイル変更を集約しています。",
+      "pending": "次のターンを始める前に、これらの変更を確認してください。",
+      "interrupted": "このターンは中断されましたが、取得済みの変更は引き続き確認できます。",
+      "unsupported": "このターンは保持できますが、一部のファイルは元に戻せません。",
+      "kept": "このターンの変更は保持されました。",
+      "autoKept": "次のターンが始まる前に、これらの変更は自動的に保持されました。",
+      "reverted": "このターンの変更は元に戻されました。",
+      "conflict": "このターン後にワークスペースが変更されたため、元に戻せませんでした。",
+      "failed": "すべてのファイルを復元する前に、元に戻す処理が失敗しました。"
+    }
+  },
   "skill_generator": {
     "title": "Generate Skill/Rule",
     "generate": "Generate",

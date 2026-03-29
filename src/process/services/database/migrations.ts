@@ -16,6 +16,86 @@ export interface IMigration {
   down: (db: ISqliteDriver) => void; // Downgrade script (for rollback)
 }
 
+type MigrationConflictDetails = {
+  table: string | null;
+  columns: string[];
+};
+
+const EMPTY_MIGRATION_CONFLICT_DETAILS: MigrationConflictDetails = {
+  table: null,
+  columns: [],
+};
+
+function parseMigrationConflictDetails(message: string): MigrationConflictDetails {
+  const uniqueConstraintPrefix = 'UNIQUE constraint failed:';
+  if (!message.includes(uniqueConstraintPrefix)) {
+    return EMPTY_MIGRATION_CONFLICT_DETAILS;
+  }
+
+  const rawTargets = message
+    .split(uniqueConstraintPrefix)[1]
+    ?.split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (!rawTargets?.length) {
+    return EMPTY_MIGRATION_CONFLICT_DETAILS;
+  }
+
+  const [firstTarget] = rawTargets;
+  const table = firstTarget?.includes('.') ? (firstTarget.split('.')[0] ?? null) : null;
+  const columns = rawTargets
+    .map((item) => (item.includes('.') ? item.split('.').slice(1).join('.') : item))
+    .filter(Boolean);
+
+  return {
+    table,
+    columns,
+  };
+}
+
+export class DatabaseMigrationError extends Error {
+  readonly fromVersion: number;
+  readonly toVersion: number;
+  readonly failedVersion: number;
+  readonly migrationName: string;
+  readonly causeMessage: string;
+  readonly conflictTable: string | null;
+  readonly conflictColumns: string[];
+
+  constructor(params: {
+    fromVersion: number;
+    toVersion: number;
+    failedVersion: number;
+    migrationName: string;
+    cause: unknown;
+  }) {
+    const causeMessage = params.cause instanceof Error ? params.cause.message : String(params.cause);
+    const conflictDetails = parseMigrationConflictDetails(causeMessage);
+    const diagnosticParts = [
+      `Migration failed from v${params.fromVersion} to v${params.toVersion} at v${params.failedVersion} (${params.migrationName}).`,
+      'Existing database preserved; recovery-as-corruption was skipped.',
+      conflictDetails.table ? `Conflict table: ${conflictDetails.table}.` : null,
+      conflictDetails.columns.length > 0 ? `Conflict fields: ${conflictDetails.columns.join(', ')}.` : null,
+      `Cause: ${causeMessage}`,
+    ].filter(Boolean);
+
+    super(diagnosticParts.join(' '));
+    this.name = 'DatabaseMigrationError';
+    this.fromVersion = params.fromVersion;
+    this.toVersion = params.toVersion;
+    this.failedVersion = params.failedVersion;
+    this.migrationName = params.migrationName;
+    this.causeMessage = causeMessage;
+    this.conflictTable = conflictDetails.table;
+    this.conflictColumns = conflictDetails.columns;
+  }
+}
+
+export function isDatabaseMigrationError(error: unknown): error is DatabaseMigrationError {
+  return error instanceof DatabaseMigrationError;
+}
+
 /**
  * Migration v0 -> v1: Initial schema
  * This is handled by initSchema() in schema.ts
@@ -923,6 +1003,209 @@ const migration_v18: IMigration = {
 };
 
 /**
+ * Migration v18 -> v19: Support running turn snapshots and per-file upsert
+ */
+const migration_v19: IMigration = {
+  version: 19,
+  name: 'Upgrade turn snapshot tables for live aggregation',
+  up: (db) => {
+    const duplicateGroupResult = db
+      .prepare(`
+        SELECT COUNT(*) as count
+        FROM (
+          SELECT turn_id, file_path
+          FROM conversation_turn_files
+          GROUP BY turn_id, file_path
+          HAVING COUNT(*) > 1
+        )
+      `)
+      .get() as { count: number };
+    const duplicateRowsResult = db
+      .prepare(`
+        SELECT COALESCE(SUM(duplicate_count - 1), 0) as count
+        FROM (
+          SELECT COUNT(*) as duplicate_count
+          FROM conversation_turn_files
+          GROUP BY turn_id, file_path
+          HAVING COUNT(*) > 1
+        )
+      `)
+      .get() as { count: number };
+
+    if (duplicateGroupResult.count > 0) {
+      console.warn(
+        `[Migration v19] Deduplicating conversation_turn_files before adding unique index: ${duplicateGroupResult.count} duplicate group(s), ${duplicateRowsResult.count} row(s) removed`
+      );
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_turns_v19 (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        backend TEXT NOT NULL,
+        request_msg_id TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        completion_signal TEXT,
+        completion_source TEXT,
+        lifecycle_status TEXT NOT NULL CHECK(lifecycle_status IN ('running', 'completed', 'interrupted')),
+        review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
+        file_count INTEGER NOT NULL DEFAULT 0,
+        source_message_ids TEXT NOT NULL,
+        last_activity_at INTEGER NOT NULL,
+        auto_kept_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      )
+    `);
+
+    db.exec(`
+      INSERT INTO conversation_turns_v19 (
+        id,
+        conversation_id,
+        backend,
+        request_msg_id,
+        started_at,
+        completed_at,
+        completion_signal,
+        completion_source,
+        lifecycle_status,
+        review_status,
+        file_count,
+        source_message_ids,
+        last_activity_at,
+        auto_kept_at,
+        created_at,
+        updated_at
+      )
+      SELECT
+        id,
+        conversation_id,
+        backend,
+        request_msg_id,
+        started_at,
+        completed_at,
+        completion_signal,
+        completion_source,
+        'completed',
+        review_status,
+        file_count,
+        source_message_ids,
+        COALESCE(completed_at, started_at),
+        NULL,
+        created_at,
+        updated_at
+      FROM conversation_turns
+    `);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_turn_files_v19_dedup (
+        id TEXT PRIMARY KEY,
+        turn_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
+        before_exists INTEGER NOT NULL,
+        after_exists INTEGER NOT NULL,
+        before_hash TEXT,
+        after_hash TEXT,
+        before_content TEXT,
+        after_content TEXT,
+        unified_diff TEXT NOT NULL,
+        source_message_ids TEXT NOT NULL,
+        revert_supported INTEGER NOT NULL DEFAULT 1,
+        revert_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (turn_id) REFERENCES conversation_turns_v19(id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      )
+    `);
+
+    db.exec(`
+      INSERT INTO conversation_turn_files_v19_dedup (
+        id,
+        turn_id,
+        conversation_id,
+        file_path,
+        file_name,
+        action,
+        before_exists,
+        after_exists,
+        before_hash,
+        after_hash,
+        before_content,
+        after_content,
+        unified_diff,
+        source_message_ids,
+        revert_supported,
+        revert_error,
+        created_at,
+        updated_at
+      )
+      SELECT
+        id,
+        turn_id,
+        conversation_id,
+        file_path,
+        file_name,
+        action,
+        before_exists,
+        after_exists,
+        before_hash,
+        after_hash,
+        before_content,
+        after_content,
+        unified_diff,
+        source_message_ids,
+        revert_supported,
+        revert_error,
+        created_at,
+        updated_at
+      FROM (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY turn_id, file_path
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+          ) AS row_number
+        FROM conversation_turn_files
+      ) ranked_turn_files
+      WHERE row_number = 1
+    `);
+
+    db.exec('DROP INDEX IF EXISTS idx_turns_conversation_completed');
+    db.exec('DROP INDEX IF EXISTS idx_turn_files_turn_id');
+    db.exec('DROP INDEX IF EXISTS idx_turn_files_conversation_path');
+    db.exec('DROP INDEX IF EXISTS idx_turn_files_turn_path');
+    db.exec('ALTER TABLE conversation_turns RENAME TO conversation_turns_v18_backup');
+    db.exec('ALTER TABLE conversation_turn_files RENAME TO conversation_turn_files_v18_backup');
+    db.exec('ALTER TABLE conversation_turns_v19 RENAME TO conversation_turns');
+    db.exec('ALTER TABLE conversation_turn_files_v19_dedup RENAME TO conversation_turn_files');
+    db.exec('DROP TABLE IF EXISTS conversation_turns_v18_backup');
+    db.exec('DROP TABLE IF EXISTS conversation_turn_files_v18_backup');
+
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, COALESCE(completed_at, last_activity_at, started_at) DESC)'
+    );
+    db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_turn_files_conversation_path ON conversation_turn_files(conversation_id, file_path)'
+    );
+    db.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_turn_files_turn_path ON conversation_turn_files(turn_id, file_path)'
+    );
+
+    console.log('[Migration v19] Upgraded turn snapshot tables for live aggregation');
+  },
+  down: (_db) => {
+    console.warn('[Migration v19] Rollback skipped: would require lossy turn snapshot downgrade.');
+  },
+};
+
+/**
  * All migrations in order
  */
 // prettier-ignore
@@ -930,6 +1213,7 @@ export const ALL_MIGRATIONS: IMigration[] = [
   migration_v1, migration_v2, migration_v3, migration_v4, migration_v5, migration_v6,
   migration_v7, migration_v8, migration_v9, migration_v10, migration_v11, migration_v12,
   migration_v13, migration_v14, migration_v15, migration_v16, migration_v17, migration_v18,
+  migration_v19,
 ];
 
 /**
@@ -974,7 +1258,7 @@ export function runMigrations(db: ISqliteDriver, fromVersion: number, toVersion:
 
   // Disable foreign keys BEFORE the transaction to allow table recreation
   // (DROP TABLE + CREATE TABLE). PRAGMA foreign_keys cannot be changed inside
-  // a transaction — it is silently ignored.
+  // a transaction 鈥?it is silently ignored.
   // See: https://www.sqlite.org/lang_altertable.html#otheralter
   db.pragma('foreign_keys = OFF');
 
@@ -987,8 +1271,16 @@ export function runMigrations(db: ISqliteDriver, fromVersion: number, toVersion:
 
         console.log(`[Migrations] ✓ Migration v${migration.version} completed`);
       } catch (error) {
-        console.error(`[Migrations] ✗ Migration v${migration.version} failed:`, error);
-        throw error; // Transaction will rollback
+        const migrationError = new DatabaseMigrationError({
+          fromVersion,
+          toVersion,
+          failedVersion: migration.version,
+          migrationName: migration.name,
+          cause: error,
+        });
+
+        console.error(`[Migrations] ✗ Migration v${migration.version} failed:`, migrationError);
+        throw migrationError; // Transaction will rollback
       }
     }
 
@@ -1041,9 +1333,9 @@ export function rollbackMigrations(db: ISqliteDriver, fromVersion: number, toVer
         console.log(`[Migrations] Rolling back migration v${migration.version}: ${migration.name}`);
         migration.down(db);
 
-        console.log(`[Migrations] ✓ Rollback v${migration.version} completed`);
+        console.log(`[Migrations] 鉁?Rollback v${migration.version} completed`);
       } catch (error) {
-        console.error(`[Migrations] ✗ Rollback v${migration.version} failed:`, error);
+        console.error(`[Migrations] 鉁?Rollback v${migration.version} failed:`, error);
         throw error; // Transaction will rollback
       }
     }

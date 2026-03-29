@@ -186,6 +186,30 @@
   "contextUsage": {
     "contextUsed": "上下文已使用"
   },
+  "turnSummary": {
+    "title": "本轮摘要",
+    "expand": "展开",
+    "collapse": "收起",
+    "viewChanges": "查看变更",
+    "waitingForChanges": "本轮文件变更正在整理中。",
+    "noFiles": "暂时还没有文件变更",
+    "lifecycle": {
+      "running": "进行中",
+      "completed": "已完成",
+      "interrupted": "已中断"
+    },
+    "description": {
+      "running": "本轮仍在持续聚合文件变更。",
+      "pending": "开始下一轮之前，请先确认这些变更。",
+      "interrupted": "本轮已中断，但当前捕获到的变更仍可继续审阅。",
+      "unsupported": "本轮可以保留，但部分文件暂不支持撤销。",
+      "kept": "本轮变更已保留。",
+      "autoKept": "在下一轮开始前，这些变更已被自动保留。",
+      "reverted": "本轮变更已撤销。",
+      "conflict": "工作区内容已变化，无法直接撤销本轮变更。",
+      "failed": "撤销未能完整恢复所有文件。"
+    }
+  },
   "skill_generator": {
     "title": "生成 Skill/规则",
     "generate": "生成",

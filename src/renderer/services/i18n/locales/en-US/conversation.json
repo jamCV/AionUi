@@ -186,6 +186,30 @@
   "contextUsage": {
     "contextUsed": "context used"
   },
+  "turnSummary": {
+    "title": "Turn Summary",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "viewChanges": "View changes",
+    "waitingForChanges": "Waiting for file changes in this turn.",
+    "noFiles": "No file changes yet",
+    "lifecycle": {
+      "running": "Running",
+      "completed": "Completed",
+      "interrupted": "Interrupted"
+    },
+    "description": {
+      "running": "This turn is still collecting file changes.",
+      "pending": "Review these changes before starting the next turn.",
+      "interrupted": "This turn was interrupted, but the captured changes can still be reviewed.",
+      "unsupported": "This turn can be kept, but revert is unavailable for some files.",
+      "kept": "These changes are kept.",
+      "autoKept": "These changes were kept automatically before the next turn started.",
+      "reverted": "These changes were reverted.",
+      "conflict": "Revert was blocked because the workspace changed after this turn.",
+      "failed": "Revert failed before all files could be restored."
+    }
+  },
   "skill_generator": {
     "title": "Generate Skill/Rule",
     "generate": "Generate",

@@ -1,6 +1,5 @@
 import { ipcBridge } from '@/common';
 import type { AcpBackend } from '@/common/types/acpTypes';
-import type { TMessage } from '@/common/chat/chatLib';
 import { uuid } from '@/common/utils';
 import SendBox from '@/renderer/components/chat/sendbox';
 import ThoughtDisplay from '@/renderer/components/chat/ThoughtDisplay';
@@ -26,6 +25,7 @@ import ContextUsageIndicator from '@/renderer/components/agent/ContextUsageIndic
 import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
 import AgentModeSelector from '@/renderer/components/agent/AgentModeSelector';
 import { useSlashCommands } from '@/renderer/hooks/chat/useSlashCommands';
+import TurnSummaryPanel from '@/renderer/pages/conversation/TurnSummaryPanel';
 import { useAcpMessage } from './useAcpMessage';
 import { useAcpInitialMessage } from './useAcpInitialMessage';
 
@@ -46,8 +46,8 @@ const useSendBoxDraft = (conversation_id: string) => {
   const content = data?.content ?? '';
 
   const setAtPath = useCallback(
-    (atPath: Array<string | FileOrFolderItem>) => {
-      mutate((prev) => ({ ...prev, atPath }));
+    (nextAtPath: Array<string | FileOrFolderItem>) => {
+      mutate((prev) => ({ ...prev, atPath: nextAtPath }));
     },
     [data, mutate]
   );
@@ -55,8 +55,8 @@ const useSendBoxDraft = (conversation_id: string) => {
   const setUploadFile = createSetUploadFile(mutate, data);
 
   const setContent = useCallback(
-    (content: string) => {
-      mutate((prev) => ({ ...prev, content }));
+    (nextContent: string) => {
+      mutate((prev) => ({ ...prev, content: nextContent }));
     },
     [data, mutate]
   );
@@ -226,6 +226,7 @@ const AcpSendBox: React.FC<{
   return (
     <div className='max-w-800px w-full mx-auto flex flex-col mt-auto mb-16px'>
       <ThoughtDisplay thought={thought} running={running || aiProcessing} onStop={handleStop} />
+      <TurnSummaryPanel conversationId={conversation_id} />
 
       <SendBox
         value={content}

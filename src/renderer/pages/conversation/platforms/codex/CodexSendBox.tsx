@@ -26,6 +26,7 @@ import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
 import AgentModeSelector from '@/renderer/components/agent/AgentModeSelector';
 import AcpConfigSelector from '@/renderer/components/agent/AcpConfigSelector';
 import { useSlashCommands } from '@/renderer/hooks/chat/useSlashCommands';
+import TurnSummaryPanel from '@/renderer/pages/conversation/TurnSummaryPanel';
 
 interface CodexDraftData {
   _type: 'codex';
@@ -391,7 +392,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
 
         // 成功后移除初始消息存储
         sessionStorage.removeItem(storageKey);
-      } catch (err) {
+      } catch {
         // 发送失败时清理处理标记，允许重试
         sessionStorage.removeItem(processedKey);
         // Only reset aiProcessing on error, normal flow is reset by 'finish' event
@@ -427,6 +428,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
   return (
     <div className='max-w-800px w-full mx-auto flex flex-col mt-auto mb-16px'>
       <ThoughtDisplay thought={thought} running={aiProcessing || running} onStop={handleStop} />
+      <TurnSummaryPanel conversationId={conversation_id} />
 
       <SendBox
         value={content}

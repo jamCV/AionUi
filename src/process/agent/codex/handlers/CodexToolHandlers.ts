@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CodexToolCallUpdate } from '@/common/chat/chatLib';
+import type { CodexToolCallUpdate, IMessageCodexToolCall } from '@/common/chat/chatLib';
 import { uuid } from '@/common/utils';
 import type { FileChange, McpInvocation, CodexEventMsg } from '@/common/types/codex/types';
 import { ToolRegistry } from '@/common/types/codex/utils';
 import type { ICodexMessageEmitter } from '@process/agent/codex/messaging/CodexMessageEmitter';
 import type { IResponseMessage } from '@/common/adapter/ipcBridge';
 import { NavigationInterceptor } from '@/common/chat/navigation';
+import { turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
 
 /**
  * Metadata for exec approval requests (for ApprovalStore)
@@ -320,6 +321,9 @@ export class CodexToolHandlers {
     };
 
     this.messageEmitter.emitAndPersistMessage(toolCallMessage);
+    if (update.subtype === 'turn_diff') {
+      void turnSnapshotCoordinator.trackCodexTurnDiff(toolCallMessage as unknown as IMessageCodexToolCall);
+    }
 
     // Clean up mapping if tool call is completed
     if (['success', 'error', 'canceled'].includes(update.status || '')) {

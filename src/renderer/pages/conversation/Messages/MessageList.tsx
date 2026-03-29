@@ -4,18 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ipcBridge } from '@/common';
 import type { CodexToolCallUpdate, IMessageAcpToolCall, IMessageToolGroup, TMessage } from '@/common/chat/chatLib';
-import type { TurnSnapshotSummary } from '@/common/types/turnSnapshot';
 import { useConversationContextSafe } from '@/renderer/hooks/context/ConversationContext';
 import { iconColors } from '@/renderer/styles/colors';
 import { CHAT_MESSAGE_JUMP_EVENT, type ChatMessageJumpDetail } from '@/renderer/utils/chat/chatMinimapEvents';
-import { Image, Message } from '@arco-design/web-react';
+import { Image } from '@arco-design/web-react';
 import { Down } from '@icon-park/react';
 import MessageAcpPermission from '@renderer/pages/conversation/Messages/acp/MessageAcpPermission';
 import MessageAcpToolCall from '@renderer/pages/conversation/Messages/acp/MessageAcpToolCall';
 import classNames from 'classnames';
-import React, { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 import { Virtuoso } from 'react-virtuoso';
@@ -52,9 +50,6 @@ type ConversationLocationState = {
   targetMessageId?: string;
   fromConversationSearch?: boolean;
 };
-
-const getSourceMessageIdsKey = (sourceMessageIds: string[]): string =>
-  [...new Set(sourceMessageIds)].toSorted((left, right) => left.localeCompare(right)).join('|');
 
 const getProcessedItemSourceMessageIds = (item: IMessageVO): string[] => {
   if ('type' in item && item.type === 'tool_summary') {
@@ -155,8 +150,6 @@ const MessageList: React.FC<{ className?: string }> = () => {
   const locationState = (location.state || {}) as ConversationLocationState;
   const targetMessageId = locationState.targetMessageId;
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | undefined>();
-  const [turnSnapshots, setTurnSnapshots] = useState<TurnSnapshotSummary[]>([]);
-  const [turnActionState, setTurnActionState] = useState<{ turnId: string; action: 'keep' | 'revert' } | null>(null);
   const handledTargetKeyRef = useRef<string>('');
 
   // Pre-process message list to group Codex turn_diff messages
@@ -246,112 +239,6 @@ const MessageList: React.FC<{ className?: string }> = () => {
     }
     return result;
   }, [list]);
-
-  const loadTurnSnapshots = useCallback(async () => {
-    if (!conversationContext?.conversationId) {
-      setTurnSnapshots([]);
-      return;
-    }
-
-    const snapshots = await ipcBridge.conversation.turnSnapshot.list.invoke({
-      conversation_id: conversationContext.conversationId,
-    });
-    setTurnSnapshots(snapshots);
-  }, [conversationContext?.conversationId]);
-
-  useEffect(() => {
-    void loadTurnSnapshots().catch(() => {
-      setTurnSnapshots([]);
-    });
-  }, [loadTurnSnapshots]);
-
-  const turnSnapshotsBySourceIds = useMemo(() => {
-    const bySourceIds = new Map<string, TurnSnapshotSummary>();
-    const byMessageId = new Map<string, TurnSnapshotSummary>();
-
-    for (const snapshot of turnSnapshots) {
-      const sourceKey = getSourceMessageIdsKey(snapshot.sourceMessageIds);
-      if (sourceKey) {
-        bySourceIds.set(sourceKey, snapshot);
-      }
-      for (const sourceMessageId of snapshot.sourceMessageIds) {
-        if (!byMessageId.has(sourceMessageId)) {
-          byMessageId.set(sourceMessageId, snapshot);
-        }
-      }
-    }
-
-    return {
-      bySourceIds,
-      byMessageId,
-    };
-  }, [turnSnapshots]);
-
-  const getTurnSnapshotForSourceIds = useCallback(
-    (sourceMessageIds: string[]): TurnSnapshotSummary | undefined => {
-      const sourceKey = getSourceMessageIdsKey(sourceMessageIds);
-      if (sourceKey) {
-        const matchedSnapshot = turnSnapshotsBySourceIds.bySourceIds.get(sourceKey);
-        if (matchedSnapshot) {
-          return matchedSnapshot;
-        }
-      }
-
-      for (const sourceMessageId of sourceMessageIds) {
-        const matchedSnapshot = turnSnapshotsBySourceIds.byMessageId.get(sourceMessageId);
-        if (matchedSnapshot) {
-          return matchedSnapshot;
-        }
-      }
-
-      return undefined;
-    },
-    [turnSnapshotsBySourceIds]
-  );
-
-  const handleKeepTurn = useCallback(
-    async (turnId: string) => {
-      setTurnActionState({ turnId, action: 'keep' });
-      try {
-        const result = await ipcBridge.conversation.turnSnapshot.keep.invoke({ turnId });
-        if (result.success) {
-          Message.success(t('messages.turnSnapshot.keepSuccess'));
-        } else {
-          Message.error(result.msg || t('messages.turnSnapshot.keepFailed'));
-        }
-      } catch (error) {
-        Message.error(error instanceof Error ? error.message : t('messages.turnSnapshot.keepFailed'));
-      } finally {
-        await loadTurnSnapshots().catch((): void => {});
-        setTurnActionState(null);
-      }
-    },
-    [loadTurnSnapshots, t]
-  );
-
-  const handleRevertTurn = useCallback(
-    async (turnId: string) => {
-      setTurnActionState({ turnId, action: 'revert' });
-      try {
-        const result = await ipcBridge.conversation.turnSnapshot.revert.invoke({ turnId });
-        if (result.success) {
-          Message.success(t('messages.turnSnapshot.revertSuccess'));
-        } else if (result.status === 'conflict') {
-          Message.error(result.msg || t('messages.turnSnapshot.conflict'));
-        } else if (result.status === 'unsupported') {
-          Message.error(result.msg || t('messages.turnSnapshot.unsupported'));
-        } else {
-          Message.error(result.msg || t('messages.turnSnapshot.revertFailed'));
-        }
-      } catch (error) {
-        Message.error(error instanceof Error ? error.message : t('messages.turnSnapshot.revertFailed'));
-      } finally {
-        await loadTurnSnapshots().catch((): void => {});
-        setTurnActionState(null);
-      }
-    },
-    [loadTurnSnapshots, t]
-  );
 
   // Use auto-scroll hook
   const {
@@ -446,12 +333,6 @@ const MessageList: React.FC<{ className?: string }> = () => {
   const renderItem = (_index: number, item: (typeof processedList)[0]) => {
     const highlighted = matchesTargetMessage(item, highlightedMessageId);
     if ('type' in item && ['file_summary', 'tool_summary'].includes(item.type)) {
-      const matchedTurnSnapshot = getTurnSnapshotForSourceIds(getProcessedItemSourceMessageIds(item));
-      const actionLoading =
-        matchedTurnSnapshot !== undefined && turnActionState?.turnId === matchedTurnSnapshot.id
-          ? turnActionState.action
-          : undefined;
-
       return (
         <div
           key={item.id}
@@ -459,32 +340,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
           className={'min-w-0 message-item px-8px m-t-10px max-w-full md:max-w-780px mx-auto ' + item.type}
           style={highlighted ? highlightStyle : undefined}
         >
-          {item.type === 'file_summary' && (
-            <MessageFileChanges
-              diffsChanges={item.diffs}
-              turnId={matchedTurnSnapshot?.id}
-              turnReviewStatus={matchedTurnSnapshot?.reviewStatus}
-              canKeep={
-                matchedTurnSnapshot?.reviewStatus === 'pending' || matchedTurnSnapshot?.reviewStatus === 'unsupported'
-              }
-              canRevert={matchedTurnSnapshot?.reviewStatus === 'pending'}
-              onKeepTurn={
-                matchedTurnSnapshot
-                  ? () => {
-                      void handleKeepTurn(matchedTurnSnapshot.id);
-                    }
-                  : undefined
-              }
-              onRevertTurn={
-                matchedTurnSnapshot && matchedTurnSnapshot.reviewStatus === 'pending'
-                  ? () => {
-                      void handleRevertTurn(matchedTurnSnapshot.id);
-                    }
-                  : undefined
-              }
-              actionLoading={!!actionLoading}
-            />
-          )}
+          {item.type === 'file_summary' && <MessageFileChanges diffsChanges={item.diffs} />}
           {item.type === 'tool_summary' && <MessageToolGroupSummary messages={item.messages}></MessageToolGroupSummary>}
         </div>
       );

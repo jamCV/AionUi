@@ -107,18 +107,23 @@ export type TurnReviewStatus = 'pending' | 'kept' | 'reverted' | 'conflict' | 'u
 
 export type TurnFileAction = 'create' | 'update' | 'delete';
 
+export type TurnLifecycleStatus = 'running' | 'completed' | 'interrupted';
+
 export type TurnSnapshotRow = {
   id: string;
   conversation_id: string;
   backend: string;
   request_msg_id: string | null;
   started_at: number;
-  completed_at: number;
-  completion_signal: string;
+  completed_at: number | null;
+  completion_signal: string | null;
   completion_source: string | null;
+  lifecycle_status: TurnLifecycleStatus;
   review_status: TurnReviewStatus;
   file_count: number;
   source_message_ids: string;
+  last_activity_at: number;
+  auto_kept_at: number | null;
   created_at: number;
   updated_at: number;
 };
@@ -150,12 +155,15 @@ export type TurnSnapshotSummary = {
   backend: string;
   requestMessageId?: string;
   startedAt: number;
-  completedAt: number;
-  completionSignal: string;
+  completedAt?: number;
+  completionSignal?: string;
   completionSource?: string;
+  lifecycleStatus: TurnLifecycleStatus;
   reviewStatus: TurnReviewStatus;
   fileCount: number;
   sourceMessageIds: string[];
+  lastActivityAt: number;
+  autoKeptAt?: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -194,6 +202,20 @@ export type CreateTurnSnapshotInput = Omit<TurnSnapshot, 'fileCount' | 'createdA
   createdAt?: number;
   updatedAt?: number;
   files: CreateTurnSnapshotFileInput[];
+};
+
+export type UpdateTurnSnapshotInput = {
+  turnId: string;
+  completedAt?: number;
+  completionSignal?: string;
+  completionSource?: string;
+  lifecycleStatus?: TurnLifecycleStatus;
+  reviewStatus?: TurnReviewStatus;
+  fileCount?: number;
+  sourceMessageIds?: string[];
+  lastActivityAt?: number;
+  autoKeptAt?: number;
+  updatedAt?: number;
 };
 
 /**
@@ -349,12 +371,15 @@ export function turnSnapshotToRow(snapshot: CreateTurnSnapshotInput): TurnSnapsh
     backend: snapshot.backend,
     request_msg_id: snapshot.requestMessageId ?? null,
     started_at: snapshot.startedAt,
-    completed_at: snapshot.completedAt,
-    completion_signal: snapshot.completionSignal,
+    completed_at: snapshot.completedAt ?? null,
+    completion_signal: snapshot.completionSignal ?? null,
     completion_source: snapshot.completionSource ?? null,
+    lifecycle_status: snapshot.lifecycleStatus,
     review_status: snapshot.reviewStatus,
     file_count: snapshot.files.length,
     source_message_ids: JSON.stringify(snapshot.sourceMessageIds),
+    last_activity_at: snapshot.lastActivityAt,
+    auto_kept_at: snapshot.autoKeptAt ?? null,
     created_at: createdAt,
     updated_at: updatedAt,
   };
@@ -393,12 +418,15 @@ export function rowToTurnSnapshotSummary(row: TurnSnapshotRow): TurnSnapshotSumm
     backend: row.backend,
     requestMessageId: row.request_msg_id ?? undefined,
     startedAt: row.started_at,
-    completedAt: row.completed_at,
-    completionSignal: row.completion_signal,
+    completedAt: row.completed_at ?? undefined,
+    completionSignal: row.completion_signal ?? undefined,
     completionSource: row.completion_source ?? undefined,
+    lifecycleStatus: row.lifecycle_status,
     reviewStatus: row.review_status,
     fileCount: row.file_count,
     sourceMessageIds: parseStringArray(row.source_message_ids),
+    lastActivityAt: row.last_activity_at,
+    autoKeptAt: row.auto_kept_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

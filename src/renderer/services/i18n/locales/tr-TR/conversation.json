@@ -181,6 +181,30 @@
   "contextUsage": {
     "contextUsed": "bağlam kullanıldı"
   },
+  "turnSummary": {
+    "title": "Tur Özeti",
+    "expand": "Genişlet",
+    "collapse": "Daralt",
+    "viewChanges": "Değişiklikleri görüntüle",
+    "waitingForChanges": "Bu turdaki dosya değişiklikleri toplanıyor.",
+    "noFiles": "Henüz dosya değişikliği yok",
+    "lifecycle": {
+      "running": "Çalışıyor",
+      "completed": "Tamamlandı",
+      "interrupted": "Kesildi"
+    },
+    "description": {
+      "running": "Bu tur hâlâ dosya değişikliklerini topluyor.",
+      "pending": "Sonraki tura başlamadan önce bu değişiklikleri gözden geçirin.",
+      "interrupted": "Bu tur kesildi ancak yakalanan değişiklikler yine de incelenebilir.",
+      "unsupported": "Bu tur saklanabilir, ancak bazı dosyalar geri alınamaz.",
+      "kept": "Bu turdaki değişiklikler saklandı.",
+      "autoKept": "Sonraki tur başlamadan önce bu değişiklikler otomatik olarak saklandı.",
+      "reverted": "Bu turdaki değişiklikler geri alındı.",
+      "conflict": "Bu turdan sonra çalışma alanı değiştiği için geri alma engellendi.",
+      "failed": "Tüm dosyalar geri yüklenmeden önce geri alma başarısız oldu."
+    }
+  },
   "skill_generator": {
     "title": "Yetenek/Kural Oluştur",
     "generate": "Oluştur",

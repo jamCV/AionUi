@@ -5,14 +5,12 @@
  */
 
 import type { CodexToolCallUpdate } from '@/common/chat/chatLib';
-import type { TurnReviewStatus } from '@/common/types/turnSnapshot';
 import FileChangesPanel, { type FileChangeItem } from '@/renderer/components/base/FileChangesPanel';
 import { usePreviewLauncher } from '@/renderer/hooks/file/usePreviewLauncher';
 import { extractContentFromDiff, parseDiff, type FileChangeInfo } from '@/renderer/utils/file/diffUtils';
 import { getFileTypeInfo } from '@/renderer/utils/file/fileType';
 import React, { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import TurnSnapshotActions from '../components/TurnSnapshotActions';
 import type { WriteFileResult } from '../types';
 
 // Re-export for backwards compatibility
@@ -29,13 +27,6 @@ export interface MessageFileChangesProps {
   /** 额外的类名 / Additional class name */
   className?: string;
   diffsChanges?: FileChangeInfo[];
-  turnId?: string;
-  turnReviewStatus?: TurnReviewStatus;
-  canKeep?: boolean;
-  canRevert?: boolean;
-  onKeepTurn?: () => void;
-  onRevertTurn?: () => void;
-  actionLoading?: boolean;
 }
 
 /**
@@ -50,13 +41,6 @@ const MessageFileChanges: React.FC<MessageFileChangesProps> = ({
   writeFileChanges = [],
   diffsChanges = [],
   className,
-  turnId,
-  turnReviewStatus,
-  canKeep,
-  canRevert,
-  onKeepTurn,
-  onRevertTurn,
-  actionLoading,
 }) => {
   const { t } = useTranslation();
   const { launchPreview } = usePreviewLauncher();
@@ -132,18 +116,6 @@ const MessageFileChanges: React.FC<MessageFileChangesProps> = ({
       onFileClick={handleFileClick}
       onDiffClick={handleDiffClick}
       className={className}
-      headerExtra={
-        turnId ? (
-          <TurnSnapshotActions
-            reviewStatus={turnReviewStatus}
-            canKeep={canKeep}
-            canRevert={canRevert}
-            onKeep={onKeepTurn}
-            onRevert={onRevertTurn}
-            actionLoading={actionLoading}
-          />
-        ) : undefined
-      }
     />
   );
 };

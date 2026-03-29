@@ -9,9 +9,10 @@ import type { ISqliteDriver } from './drivers/ISqliteDriver';
 import { createDriver } from './drivers/createDriver';
 import fs from 'fs';
 import path from 'path';
-import { runMigrations as executeMigrations } from './migrations';
+import { isDatabaseMigrationError, runMigrations as executeMigrations } from './migrations';
 import { CURRENT_DB_VERSION, getDatabaseVersion, initSchema, setDatabaseVersion } from './schema';
 import type {
+  CreateTurnSnapshotFileInput,
   CreateTurnSnapshotInput,
   IConversationRow,
   IMessageRow,
@@ -23,6 +24,7 @@ import type {
   TurnSnapshotFileRow,
   TurnSnapshotRow,
   TurnSnapshotSummary,
+  UpdateTurnSnapshotInput,
   IUser,
   TChatConversation,
   TMessage,
@@ -119,14 +121,29 @@ export class AionUIDatabase {
   static async create(dbPath: string): Promise<AionUIDatabase> {
     const dir = path.dirname(dbPath);
     ensureDirectory(dir);
+    let driver: ISqliteDriver | null = null;
 
     // Attempt normal initialization
     try {
-      const driver = await createDriver(dbPath);
+      driver = await createDriver(dbPath);
       const instance = new AionUIDatabase(driver);
       instance.initialize();
       return instance;
     } catch (error) {
+      try {
+        driver?.close();
+      } catch (closeError) {
+        console.warn('[Database] Failed to close database handle after initialization error:', closeError);
+      }
+
+      if (isDatabaseMigrationError(error)) {
+        console.error(
+          `[Database] Initialization failed during migration; existing database was preserved at: ${dbPath}`,
+          error
+        );
+        throw error;
+      }
+
       console.error('[Database] Failed to initialize, attempting recovery...', error);
     }
 
@@ -165,8 +182,8 @@ export class AionUIDatabase {
     }
 
     // Retry with fresh file
-    const driver = await createDriver(dbPath);
-    const instance = new AionUIDatabase(driver);
+    const recoveredDriver = await createDriver(dbPath);
+    const instance = new AionUIDatabase(recoveredDriver);
     instance.initialize();
     return instance;
   }
@@ -978,12 +995,15 @@ export class AionUIDatabase {
           completed_at,
           completion_signal,
           completion_source,
+          lifecycle_status,
           review_status,
           file_count,
           source_message_ids,
+          last_activity_at,
+          auto_kept_at,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertFileStatement = this.db.prepare(`
         INSERT INTO conversation_turn_files (
@@ -1018,9 +1038,12 @@ export class AionUIDatabase {
           turnRow.completed_at,
           turnRow.completion_signal,
           turnRow.completion_source,
+          turnRow.lifecycle_status,
           turnRow.review_status,
           turnRow.file_count,
           turnRow.source_message_ids,
+          turnRow.last_activity_at,
+          turnRow.auto_kept_at,
           turnRow.created_at,
           turnRow.updated_at
         );
@@ -1050,6 +1073,79 @@ export class AionUIDatabase {
       });
 
       insertSnapshot();
+
+      return {
+        success: true,
+        data: true,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
+      };
+    }
+  }
+
+  upsertTurnSnapshotFile(input: CreateTurnSnapshotFileInput): IQueryResult<boolean> {
+    try {
+      const fileRow = turnSnapshotFileToRow(input);
+      this.db
+        .prepare(
+          `
+            INSERT INTO conversation_turn_files (
+              id,
+              turn_id,
+              conversation_id,
+              file_path,
+              file_name,
+              action,
+              before_exists,
+              after_exists,
+              before_hash,
+              after_hash,
+              before_content,
+              after_content,
+              unified_diff,
+              source_message_ids,
+              revert_supported,
+              revert_error,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(turn_id, file_path) DO UPDATE SET
+              file_name = excluded.file_name,
+              action = excluded.action,
+              after_exists = excluded.after_exists,
+              after_hash = excluded.after_hash,
+              after_content = excluded.after_content,
+              unified_diff = excluded.unified_diff,
+              source_message_ids = excluded.source_message_ids,
+              revert_supported = excluded.revert_supported,
+              revert_error = excluded.revert_error,
+              updated_at = excluded.updated_at
+          `
+        )
+        .run(
+          fileRow.id,
+          fileRow.turn_id,
+          fileRow.conversation_id,
+          fileRow.file_path,
+          fileRow.file_name,
+          fileRow.action,
+          fileRow.before_exists,
+          fileRow.after_exists,
+          fileRow.before_hash,
+          fileRow.after_hash,
+          fileRow.before_content,
+          fileRow.after_content,
+          fileRow.unified_diff,
+          fileRow.source_message_ids,
+          fileRow.revert_supported,
+          fileRow.revert_error,
+          fileRow.created_at,
+          fileRow.updated_at
+        );
 
       return {
         success: true,
@@ -1111,7 +1207,7 @@ export class AionUIDatabase {
             SELECT *
             FROM conversation_turns
             WHERE conversation_id = ?
-            ORDER BY completed_at DESC
+            ORDER BY COALESCE(completed_at, last_activity_at, started_at) DESC
             LIMIT ?
           `
         )
@@ -1126,6 +1222,75 @@ export class AionUIDatabase {
         success: false,
         error: error.message,
         data: [],
+      };
+    }
+  }
+
+  updateTurnSnapshot(input: UpdateTurnSnapshotInput): IQueryResult<boolean> {
+    try {
+      const fields: string[] = [];
+      const args: Array<number | string | null> = [];
+
+      if (input.completedAt !== undefined) {
+        fields.push('completed_at = ?');
+        args.push(input.completedAt);
+      }
+      if (input.completionSignal !== undefined) {
+        fields.push('completion_signal = ?');
+        args.push(input.completionSignal);
+      }
+      if (input.completionSource !== undefined) {
+        fields.push('completion_source = ?');
+        args.push(input.completionSource);
+      }
+      if (input.lifecycleStatus !== undefined) {
+        fields.push('lifecycle_status = ?');
+        args.push(input.lifecycleStatus);
+      }
+      if (input.reviewStatus !== undefined) {
+        fields.push('review_status = ?');
+        args.push(input.reviewStatus);
+      }
+      if (input.fileCount !== undefined) {
+        fields.push('file_count = ?');
+        args.push(input.fileCount);
+      }
+      if (input.sourceMessageIds !== undefined) {
+        fields.push('source_message_ids = ?');
+        args.push(JSON.stringify(input.sourceMessageIds));
+      }
+      if (input.lastActivityAt !== undefined) {
+        fields.push('last_activity_at = ?');
+        args.push(input.lastActivityAt);
+      }
+      if (input.autoKeptAt !== undefined) {
+        fields.push('auto_kept_at = ?');
+        args.push(input.autoKeptAt);
+      }
+
+      fields.push('updated_at = ?');
+      args.push(input.updatedAt ?? Date.now());
+      args.push(input.turnId);
+
+      const result = this.db
+        .prepare(
+          `
+            UPDATE conversation_turns
+            SET ${fields.join(', ')}
+            WHERE id = ?
+          `
+        )
+        .run(...args);
+
+      return {
+        success: true,
+        data: result.changes > 0,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
       };
     }
   }
@@ -1177,6 +1342,22 @@ export class AionUIDatabase {
         success: false,
         error: error.message,
         data: [],
+      };
+    }
+  }
+
+  deleteTurnSnapshot(turnId: string): IQueryResult<boolean> {
+    try {
+      const result = this.db.prepare('DELETE FROM conversation_turns WHERE id = ?').run(turnId);
+      return {
+        success: true,
+        data: result.changes > 0,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
       };
     }
   }

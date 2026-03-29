@@ -7,6 +7,7 @@
 import type { IMessageAcpToolCall, IMessageCodexToolCall, TMessage } from '@/common/chat/chatLib';
 import type { TChatConversation } from '@/common/config/storage';
 import type { ToolCallContentItem, ToolCallNormalizedDiffItem } from '@/common/types/acpTypes';
+import { ipcBridge } from '@/common';
 import { uuid } from '@/common/utils';
 import type { IConversationRepository } from '@process/services/database/IConversationRepository';
 import { SqliteConversationRepository } from '@process/services/database/SqliteConversationRepository';
@@ -15,6 +16,7 @@ import type {
   CreateTurnSnapshotInput,
   TurnFileAction,
   TurnReviewStatus,
+  TurnSnapshot,
 } from '@process/services/database/types';
 import { drainConversationMessageWrites } from '@process/utils/message';
 import { applyPatch, createTwoFilesPatch, formatPatch, parsePatch, reversePatch } from 'diff';
@@ -32,6 +34,7 @@ type ActiveTurn = {
   backend: string;
   requestMessageId?: string;
   startedAt: number;
+  workspace: string;
   completing: boolean;
 };
 
@@ -110,6 +113,9 @@ const parseCompletionSource = (data: unknown): string | undefined => {
   return typeof completionSource === 'string' ? completionSource : undefined;
 };
 
+const getLifecycleStatus = (completionSignal: string): 'completed' | 'interrupted' =>
+  completionSignal === 'finish' ? 'completed' : 'interrupted';
+
 const createUnifiedDiff = (
   filePath: string,
   beforeExists: boolean,
@@ -136,22 +142,65 @@ export class TurnSnapshotCoordinator {
   ) {}
 
   async startTurn(input: StartTurnInput): Promise<string> {
+    const conversation = await this.repo.getConversation(input.conversationId);
+    if (!conversation) {
+      return '';
+    }
+
+    const workspace = getConversationWorkspace(conversation);
+    if (!workspace) {
+      return '';
+    }
+
+    const startedAt = input.startedAt ?? this.deps.now();
     const activeTurn: ActiveTurn = {
       id: this.deps.createId(),
       conversationId: input.conversationId,
       backend: input.backend,
       requestMessageId: input.requestMessageId,
-      startedAt: input.startedAt ?? this.deps.now(),
+      startedAt,
+      workspace,
       completing: false,
     };
+
+    await this.repo.createTurnSnapshot({
+      id: activeTurn.id,
+      conversationId: input.conversationId,
+      backend: input.backend,
+      requestMessageId: input.requestMessageId,
+      startedAt,
+      lifecycleStatus: 'running',
+      reviewStatus: 'pending',
+      sourceMessageIds: [],
+      lastActivityAt: startedAt,
+      files: [],
+      createdAt: startedAt,
+      updatedAt: startedAt,
+    });
+    const initialSnapshot = await this.repo.getTurnSnapshot(activeTurn.id);
+    if (initialSnapshot) {
+      this.emitLiveSnapshot(initialSnapshot, 'started');
+    }
 
     this.activeTurns.set(input.conversationId, activeTurn);
 
     return activeTurn.id;
   }
 
-  discardTurn(conversationId: string): void {
-    this.activeTurns.delete(conversationId);
+  async discardTurn(conversationId: string): Promise<void> {
+    const activeTurn = this.activeTurns.get(conversationId);
+    if (activeTurn) {
+      await this.repo.deleteTurnSnapshot(activeTurn.id);
+      this.activeTurns.delete(conversationId);
+    }
+  }
+
+  async trackAcpToolCall(message: IMessageAcpToolCall): Promise<void> {
+    await this.trackMessageFiles(message.conversation_id, [message], Number(message.createdAt || this.deps.now()));
+  }
+
+  async trackCodexTurnDiff(message: IMessageCodexToolCall): Promise<void> {
+    await this.trackMessageFiles(message.conversation_id, [message], Number(message.createdAt || this.deps.now()));
   }
 
   async completeTurn(input: CompleteTurnInput): Promise<void> {
@@ -164,10 +213,49 @@ export class TurnSnapshotCoordinator {
 
     try {
       await this.deps.drainWrites(input.conversationId);
+      const existingSnapshot = await this.repo.getTurnSnapshot(activeTurn.id);
 
-      const snapshotInput = await this.buildTurnSnapshot(activeTurn, input);
-      if (snapshotInput) {
-        await this.repo.createTurnSnapshot(snapshotInput);
+      if (!existingSnapshot || existingSnapshot.files.length === 0) {
+        const snapshotInput = await this.buildTurnSnapshot(activeTurn, input);
+        if (snapshotInput) {
+          for (const file of snapshotInput.files) {
+            await this.repo.upsertTurnSnapshotFile(file);
+          }
+          await this.repo.updateTurnSnapshot({
+            turnId: activeTurn.id,
+            fileCount: snapshotInput.files.length,
+            sourceMessageIds: snapshotInput.sourceMessageIds,
+            lastActivityAt: snapshotInput.updatedAt ?? this.deps.now(),
+            reviewStatus: snapshotInput.reviewStatus,
+            updatedAt: snapshotInput.updatedAt,
+          });
+        }
+      }
+
+      const finalizedSnapshot = await this.repo.getTurnSnapshot(activeTurn.id);
+      const finalizedFiles = finalizedSnapshot?.files ?? [];
+      if (finalizedFiles.length === 0) {
+        await this.repo.deleteTurnSnapshot(activeTurn.id);
+        return;
+      }
+
+      await this.repo.updateTurnSnapshot({
+        turnId: activeTurn.id,
+        completedAt: this.deps.now(),
+        completionSignal: input.completionSignal,
+        completionSource: input.completionSource,
+        lifecycleStatus: getLifecycleStatus(input.completionSignal),
+        reviewStatus: finalizedFiles.every((file) => file.revertSupported) ? 'pending' : 'unsupported',
+        fileCount: finalizedFiles.length,
+        sourceMessageIds: [...new Set(finalizedFiles.flatMap((file) => file.sourceMessageIds))],
+        lastActivityAt: this.deps.now(),
+      });
+      const completedSnapshot = await this.repo.getTurnSnapshot(activeTurn.id);
+      if (completedSnapshot) {
+        this.emitLiveSnapshot(
+          completedSnapshot,
+          completedSnapshot.lifecycleStatus === 'completed' ? 'completed' : 'interrupted'
+        );
       }
     } catch (error) {
       console.error('[TurnSnapshotCoordinator] Failed to complete turn snapshot:', error);
@@ -177,6 +265,78 @@ export class TurnSnapshotCoordinator {
         this.activeTurns.delete(input.conversationId);
       }
     }
+  }
+
+  private async trackMessageFiles(conversationId: string, messages: TMessage[], activityAt: number): Promise<void> {
+    const activeTurn = this.activeTurns.get(conversationId);
+    if (!activeTurn || activeTurn.completing) {
+      return;
+    }
+
+    const extractedFiles = await this.extractTurnFiles(messages, activeTurn.workspace);
+    if (extractedFiles.length === 0) {
+      return;
+    }
+
+    const currentSnapshot = await this.repo.getTurnSnapshot(activeTurn.id);
+    const existingFilesByPath = new Map(currentSnapshot?.files.map((file) => [file.filePath, file]));
+    const sourceMessageIds = new Set(currentSnapshot?.sourceMessageIds ?? []);
+
+    for (const file of extractedFiles) {
+      const existingFile = existingFilesByPath.get(file.filePath);
+      const mergedSourceIds = [...new Set([...(existingFile?.sourceMessageIds ?? []), ...file.sourceMessageIds])];
+      mergedSourceIds.forEach((sourceId) => sourceMessageIds.add(sourceId));
+
+      await this.repo.upsertTurnSnapshotFile({
+        id: existingFile?.id ?? this.deps.createId(),
+        turnId: activeTurn.id,
+        conversationId: activeTurn.conversationId,
+        filePath: file.filePath,
+        fileName: path.basename(file.filePath),
+        action: file.action,
+        beforeExists: existingFile?.beforeExists ?? file.beforeExists,
+        afterExists: file.afterExists,
+        beforeHash: existingFile?.beforeHash ?? file.beforeHash,
+        afterHash: file.afterHash,
+        beforeContent: existingFile?.beforeContent ?? file.beforeContent,
+        afterContent: file.afterContent,
+        unifiedDiff: file.unifiedDiff,
+        sourceMessageIds: mergedSourceIds,
+        revertSupported: (existingFile?.revertSupported ?? true) && file.revertSupported,
+        revertError: existingFile?.revertError ?? file.revertError,
+        createdAt: existingFile?.createdAt ?? activityAt,
+        updatedAt: activityAt,
+      });
+    }
+
+    const snapshotAfterUpdate = await this.repo.getTurnSnapshot(activeTurn.id);
+    await this.repo.updateTurnSnapshot({
+      turnId: activeTurn.id,
+      lifecycleStatus: 'running',
+      reviewStatus: snapshotAfterUpdate?.files.every((file) => file.revertSupported) ? 'pending' : 'unsupported',
+      fileCount: snapshotAfterUpdate?.files.length ?? extractedFiles.length,
+      sourceMessageIds: [...sourceMessageIds],
+      lastActivityAt: activityAt,
+      updatedAt: activityAt,
+    });
+    const updatedSnapshot = await this.repo.getTurnSnapshot(activeTurn.id);
+    if (updatedSnapshot) {
+      this.emitLiveSnapshot(updatedSnapshot, 'file-updated');
+    }
+  }
+
+  private emitLiveSnapshot(
+    snapshot: TurnSnapshot,
+    reason: 'started' | 'file-updated' | 'completed' | 'interrupted'
+  ): void {
+    if (!snapshot) {
+      return;
+    }
+    ipcBridge.conversation.turnSnapshot.live.emit({
+      conversationId: snapshot.conversationId,
+      summary: snapshot,
+      reason,
+    });
   }
 
   private async buildTurnSnapshot(
@@ -218,8 +378,10 @@ export class TurnSnapshotCoordinator {
       completedAt: createdAt,
       completionSignal: completion.completionSignal,
       completionSource: completion.completionSource,
+      lifecycleStatus: getLifecycleStatus(completion.completionSignal),
       reviewStatus,
       sourceMessageIds,
+      lastActivityAt: createdAt,
       createdAt,
       updatedAt: createdAt,
       files: extractedFiles.map((file) => ({

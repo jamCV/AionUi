@@ -10,11 +10,13 @@ import type { TChatConversation } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
 import type { IMessageSearchResponse } from '@/common/types/database';
 import type {
+  CreateTurnSnapshotFileInput,
   CreateTurnSnapshotInput,
   TurnReviewStatus,
   TurnSnapshot,
   TurnSnapshotFile,
   TurnSnapshotSummary,
+  UpdateTurnSnapshotInput,
 } from './types';
 
 /**
@@ -105,6 +107,11 @@ export class SqliteConversationRepository implements IConversationRepository {
     db.createTurnSnapshot(input);
   }
 
+  async upsertTurnSnapshotFile(input: CreateTurnSnapshotFileInput): Promise<void> {
+    const db = await this.getDb();
+    db.upsertTurnSnapshotFile(input);
+  }
+
   async getTurnSnapshot(turnId: string): Promise<TurnSnapshot | undefined> {
     const db = await this.getDb();
     const result = db.getTurnSnapshot(turnId);
@@ -117,6 +124,11 @@ export class SqliteConversationRepository implements IConversationRepository {
     return result.data ?? [];
   }
 
+  async updateTurnSnapshot(input: UpdateTurnSnapshotInput): Promise<void> {
+    const db = await this.getDb();
+    db.updateTurnSnapshot(input);
+  }
+
   async updateTurnReviewStatus(turnId: string, status: TurnReviewStatus): Promise<void> {
     const db = await this.getDb();
     db.updateTurnReviewStatus(turnId, status);
@@ -126,5 +138,10 @@ export class SqliteConversationRepository implements IConversationRepository {
     const db = await this.getDb();
     const result = db.getTurnSnapshotFiles(turnId);
     return result.data ?? [];
+  }
+
+  async deleteTurnSnapshot(turnId: string): Promise<void> {
+    const db = await this.getDb();
+    db.deleteTurnSnapshot(turnId);
   }
 }

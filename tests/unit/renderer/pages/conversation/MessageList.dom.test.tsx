@@ -1,23 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockListInvoke = vi.fn();
-const mockKeepInvoke = vi.fn();
 const mockUseMessageList = vi.fn();
-const mockMessageSuccess = vi.fn();
-
-vi.mock('@/common', () => ({
-  ipcBridge: {
-    conversation: {
-      turnSnapshot: {
-        list: { invoke: (...args: unknown[]) => mockListInvoke(...args) },
-        keep: { invoke: (...args: unknown[]) => mockKeepInvoke(...args) },
-        revert: { invoke: vi.fn() },
-      },
-    },
-  },
-}));
 
 vi.mock('@/renderer/hooks/context/ConversationContext', () => ({
   useConversationContextSafe: () => ({
@@ -44,10 +29,6 @@ vi.mock('@/renderer/pages/conversation/Messages/useAutoScroll', () => ({
 vi.mock('@arco-design/web-react', () => ({
   Image: {
     PreviewGroup: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-  },
-  Message: {
-    success: (...args: unknown[]) => mockMessageSuccess(...args),
-    error: vi.fn(),
   },
 }));
 
@@ -98,32 +79,8 @@ vi.mock('@renderer/utils/common', () => ({
 
 vi.mock('@/renderer/pages/conversation/Messages/codex/MessageFileChanges', () => ({
   __esModule: true,
-  default: ({
-    turnId,
-    turnReviewStatus,
-    canKeep,
-    canRevert,
-    onKeepTurn,
-    onRevertTurn,
-  }: {
-    turnId?: string;
-    turnReviewStatus?: string;
-    canKeep?: boolean;
-    canRevert?: boolean;
-    onKeepTurn?: () => void;
-    onRevertTurn?: () => void;
-  }) =>
-    React.createElement(
-      'div',
-      {},
-      React.createElement(
-        'span',
-        {},
-        `${turnId ?? 'none'}:${turnReviewStatus ?? 'none'}:${String(canKeep)}:${String(canRevert)}`
-      ),
-      onKeepTurn ? React.createElement('button', { onClick: onKeepTurn }, 'keep-turn') : null,
-      onRevertTurn ? React.createElement('button', { onClick: onRevertTurn }, 'revert-turn') : null
-    ),
+  default: ({ diffsChanges }: { diffsChanges: Array<{ fullPath: string }> }) =>
+    React.createElement('div', {}, `file-summary:${diffsChanges.map((diff) => diff.fullPath).join(',')}`),
   parseDiff: (diff: string, fileNameHint?: string) => ({
     fileName: fileNameHint ?? 'test.ts',
     fullPath: fileNameHint ?? 'test.ts',
@@ -185,7 +142,7 @@ vi.mock('@/renderer/pages/conversation/Messages/components/MessagetText', () => 
 
 import MessageList from '@/renderer/pages/conversation/Messages/MessageList';
 
-describe('MessageList turn snapshot wiring', () => {
+describe('MessageList file summary grouping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseMessageList.mockReturnValue([
@@ -215,67 +172,9 @@ describe('MessageList turn snapshot wiring', () => {
     ]);
   });
 
-  it('maps ACP normalized diffs to file summary and refreshes after keep', async () => {
-    let status: 'pending' | 'kept' = 'pending';
-
-    mockListInvoke.mockImplementation(async () => [
-      {
-        id: 'turn-1',
-        conversationId: 'conv-1',
-        backend: 'codex',
-        startedAt: 1,
-        completedAt: 2,
-        completionSignal: 'finish',
-        reviewStatus: status,
-        fileCount: 1,
-        sourceMessageIds: ['acp-message-1'],
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ]);
-    mockKeepInvoke.mockImplementation(async ({ turnId }: { turnId: string }) => {
-      status = 'kept';
-      return { success: true, turnId, reviewStatus: 'kept' };
-    });
-
+  it('maps ACP normalized diffs into a file summary item', () => {
     render(<MessageList />);
 
-    await waitFor(() => {
-      expect(screen.getByText('turn-1:pending:true:true')).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText('keep-turn'));
-
-    await waitFor(() => {
-      expect(mockKeepInvoke).toHaveBeenCalledWith({ turnId: 'turn-1' });
-      expect(mockMessageSuccess).toHaveBeenCalledWith('messages.turnSnapshot.keepSuccess');
-      expect(screen.getByText('turn-1:kept:false:false')).toBeTruthy();
-    });
-  });
-
-  it('renders unsupported snapshots as keep-only', async () => {
-    mockListInvoke.mockResolvedValue([
-      {
-        id: 'turn-unsupported',
-        conversationId: 'conv-1',
-        backend: 'codex',
-        startedAt: 1,
-        completedAt: 2,
-        completionSignal: 'finish',
-        reviewStatus: 'unsupported',
-        fileCount: 1,
-        sourceMessageIds: ['acp-message-1'],
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ]);
-
-    render(<MessageList />);
-
-    await waitFor(() => {
-      expect(screen.getByText('turn-unsupported:unsupported:true:false')).toBeTruthy();
-    });
-
-    expect(screen.queryByText('revert-turn')).toBeNull();
+    expect(screen.getByText('file-summary:src/example.ts')).toBeTruthy();
   });
 });

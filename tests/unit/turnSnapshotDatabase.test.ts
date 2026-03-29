@@ -65,14 +65,17 @@ class FakeSqliteDriver implements ISqliteDriver {
             backend: String(args[2]),
             request_msg_id: typeof args[3] === 'string' ? args[3] : null,
             started_at: Number(args[4]),
-            completed_at: Number(args[5]),
-            completion_signal: String(args[6]),
+            completed_at: typeof args[5] === 'number' ? args[5] : null,
+            completion_signal: typeof args[6] === 'string' ? args[6] : null,
             completion_source: typeof args[7] === 'string' ? args[7] : null,
-            review_status: args[8] as TurnSnapshotRow['review_status'],
-            file_count: Number(args[9]),
-            source_message_ids: String(args[10]),
-            created_at: Number(args[11]),
-            updated_at: Number(args[12]),
+            lifecycle_status: args[8] as TurnSnapshotRow['lifecycle_status'],
+            review_status: args[9] as TurnSnapshotRow['review_status'],
+            file_count: Number(args[10]),
+            source_message_ids: String(args[11]),
+            last_activity_at: Number(args[12]),
+            auto_kept_at: typeof args[13] === 'number' ? args[13] : null,
+            created_at: Number(args[14]),
+            updated_at: Number(args[15]),
           };
           this.turns.set(row.id, row);
           return { changes: 1, lastInsertRowid: 1 };
@@ -105,7 +108,13 @@ class FakeSqliteDriver implements ISqliteDriver {
             created_at: Number(args[16]),
             updated_at: Number(args[17]),
           };
-          this.turnFiles.set(row.id, row);
+          const existingRow = [...this.turnFiles.values()].find(
+            (item) => item.turn_id === row.turn_id && item.file_path === row.file_path
+          );
+          this.turnFiles.set(
+            existingRow?.id ?? row.id,
+            existingRow ? { ...existingRow, ...row, id: existingRow.id } : row
+          );
           return { changes: 1, lastInsertRowid: 1 };
         },
       };
@@ -136,29 +145,90 @@ class FakeSqliteDriver implements ISqliteDriver {
         all: (...args) =>
           [...this.turns.values()]
             .filter((row) => row.conversation_id === String(args[0]))
-            .toSorted((left, right) => right.completed_at - left.completed_at)
+            .toSorted(
+              (left, right) =>
+                (right.completed_at ?? right.last_activity_at ?? right.started_at) -
+                (left.completed_at ?? left.last_activity_at ?? left.started_at)
+            )
             .slice(0, Number(args[1])),
         run: () => ({ changes: 0, lastInsertRowid: 0 }),
       };
     }
 
-    if (normalizedSql.includes('UPDATE conversation_turns') && normalizedSql.includes('SET review_status = ?')) {
+    if (normalizedSql.includes('UPDATE conversation_turns')) {
       return {
         get: () => undefined,
         all: () => [],
         run: (...args) => {
-          const turnId = String(args[2]);
+          const turnId = String(args[args.length - 1]);
           const existingRow = this.turns.get(turnId);
           if (!existingRow) {
             return { changes: 0, lastInsertRowid: 0 };
           }
 
-          this.turns.set(turnId, {
-            ...existingRow,
-            review_status: args[0] as TurnSnapshotRow['review_status'],
-            updated_at: Number(args[1]),
+          const assignments = normalizedSql
+            .split('SET ')[1]
+            ?.split(' WHERE')[0]
+            ?.split(',')
+            .map((item) => item.trim().split(' = ')[0])
+            .filter(Boolean);
+
+          const updatedRow: TurnSnapshotRow = { ...existingRow };
+          assignments?.forEach((field, index) => {
+            const value = args[index];
+            switch (field) {
+              case 'completed_at':
+                updatedRow.completed_at = typeof value === 'number' ? value : null;
+                break;
+              case 'completion_signal':
+                updatedRow.completion_signal = typeof value === 'string' ? value : null;
+                break;
+              case 'completion_source':
+                updatedRow.completion_source = typeof value === 'string' ? value : null;
+                break;
+              case 'lifecycle_status':
+                updatedRow.lifecycle_status = value as TurnSnapshotRow['lifecycle_status'];
+                break;
+              case 'review_status':
+                updatedRow.review_status = value as TurnSnapshotRow['review_status'];
+                break;
+              case 'file_count':
+                updatedRow.file_count = Number(value);
+                break;
+              case 'source_message_ids':
+                updatedRow.source_message_ids = String(value);
+                break;
+              case 'last_activity_at':
+                updatedRow.last_activity_at = Number(value);
+                break;
+              case 'auto_kept_at':
+                updatedRow.auto_kept_at = typeof value === 'number' ? value : null;
+                break;
+              case 'updated_at':
+                updatedRow.updated_at = Number(value);
+                break;
+            }
           });
+
+          this.turns.set(turnId, updatedRow);
           return { changes: 1, lastInsertRowid: 0 };
+        },
+      };
+    }
+
+    if (normalizedSql === 'DELETE FROM conversation_turns WHERE id = ?') {
+      return {
+        get: () => undefined,
+        all: () => [],
+        run: (...args) => {
+          const turnId = String(args[0]);
+          const existed = this.turns.delete(turnId);
+          for (const [fileId, row] of this.turnFiles.entries()) {
+            if (row.turn_id === turnId) {
+              this.turnFiles.delete(fileId);
+            }
+          }
+          return { changes: existed ? 1 : 0, lastInsertRowid: 0 };
         },
       };
     }
@@ -188,9 +258,12 @@ class FakeSqliteDriver implements ISqliteDriver {
             'completed_at',
             'completion_signal',
             'completion_source',
+            'lifecycle_status',
             'review_status',
             'file_count',
             'source_message_ids',
+            'last_activity_at',
+            'auto_kept_at',
             'created_at',
             'updated_at',
           ];
@@ -220,7 +293,7 @@ class FakeSqliteDriver implements ISqliteDriver {
         continue;
       }
 
-      const createIndexMatch = statement.match(/^CREATE INDEX IF NOT EXISTS ([a-zA-Z0-9_]+)/i);
+      const createIndexMatch = statement.match(/^CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ([a-zA-Z0-9_]+)/i);
       if (createIndexMatch) {
         this.indexes.add(createIndexMatch[1]);
         continue;
@@ -282,8 +355,10 @@ const makeTurnSnapshotInput = (): CreateTurnSnapshotInput => ({
   completedAt: 20,
   completionSignal: 'finish',
   completionSource: 'end_turn',
+  lifecycleStatus: 'completed',
   reviewStatus: 'pending',
   sourceMessageIds: ['message-1', 'message-2'],
+  lastActivityAt: 20,
   files: [
     {
       id: 'turn-file-1',

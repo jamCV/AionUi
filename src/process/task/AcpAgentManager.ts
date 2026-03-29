@@ -363,6 +363,9 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
               } else {
                 this.flushBufferedStreamTextMessages();
                 addOrUpdateMessage(message.conversation_id, tMessage, data.backend);
+                if (tMessage.type === 'acp_tool_call') {
+                  void turnSnapshotCoordinator.trackAcpToolCall(tMessage);
+                }
               }
               const dbDuration = Date.now() - dbStart;
 
@@ -417,7 +420,8 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         onSignalEvent: async (v) => {
           // Flush buffered text chunks before handling turn-level signals
           this.flushBufferedStreamTextMessages();
-          let shouldCompleteTurn = v.type === 'finish';
+          const turnCompletionSignals = new Set(['finish', 'error', 'stop']);
+          let shouldCompleteTurn = turnCompletionSignals.has(v.type);
           const completionSource = parseCompletionSource(v.data);
 
           // 仅发送信号到前端，不更新消息列表

@@ -77,18 +77,21 @@ export function initSchema(db: ISqliteDriver): void {
     backend TEXT NOT NULL,
     request_msg_id TEXT,
     started_at INTEGER NOT NULL,
-    completed_at INTEGER NOT NULL,
-    completion_signal TEXT NOT NULL,
+    completed_at INTEGER,
+    completion_signal TEXT,
     completion_source TEXT,
+    lifecycle_status TEXT NOT NULL CHECK(lifecycle_status IN ('running', 'completed', 'interrupted')),
     review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
     file_count INTEGER NOT NULL DEFAULT 0,
     source_message_ids TEXT NOT NULL,
+    last_activity_at INTEGER NOT NULL,
+    auto_kept_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   )`);
   db.exec(
-    'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, completed_at DESC)'
+    'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, COALESCE(completed_at, last_activity_at, started_at) DESC)'
   );
 
   db.exec(`CREATE TABLE IF NOT EXISTS conversation_turn_files (
@@ -111,6 +114,7 @@ export function initSchema(db: ISqliteDriver): void {
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY (turn_id) REFERENCES conversation_turns(id) ON DELETE CASCADE,
+    UNIQUE(turn_id, file_path),
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   )`);
   db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
@@ -146,4 +150,4 @@ export function setDatabaseVersion(db: ISqliteDriver, version: number): void {
  * Current database schema version
  * Update this when adding new migrations in migrations.ts
  */
-export const CURRENT_DB_VERSION = 18;
+export const CURRENT_DB_VERSION = 19;

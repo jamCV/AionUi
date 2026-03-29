@@ -238,6 +238,8 @@ export function initConversationBridge(
       const conversation = await conversationService.getConversation(id);
       const source = conversation?.source;
 
+      await turnSnapshotService.autoKeepPendingTurn(id).catch((): void => undefined);
+
       // Kill the running task if exists
       workerTaskManager.kill(id);
 
@@ -322,8 +324,9 @@ export function initConversationBridge(
     }
   });
 
-  ipcBridge.conversation.reset.provider(({ id }) => {
+  ipcBridge.conversation.reset.provider(async ({ id }) => {
     if (id) {
+      await turnSnapshotService.autoKeepPendingTurn(id).catch((): void => undefined);
       workerTaskManager.kill(id);
     } else {
       workerTaskManager.clear();
@@ -399,6 +402,11 @@ export function initConversationBridge(
     const task = workerTaskManager.getTask(conversation_id);
     if (!task) return { success: true, msg: 'conversation not found' };
     await task.stop();
+    await turnSnapshotCoordinator.completeTurn({
+      conversationId: conversation_id,
+      completionSignal: 'stop',
+      completionSource: 'user_stop',
+    });
     return { success: true };
   });
 
@@ -480,6 +488,7 @@ export function initConversationBridge(
     try {
       const turnBackend = resolveTurnBackend(conversation, task);
       if (turnBackend) {
+        await turnSnapshotService.autoKeepPendingTurn(conversation_id).catch((): void => undefined);
         await turnSnapshotCoordinator.startTurn({
           conversationId: conversation_id,
           backend: turnBackend,
@@ -497,11 +506,11 @@ export function initConversationBridge(
         agentContent,
       })) as unknown;
       if (turnBackend && isFailedSendResult(result)) {
-        turnSnapshotCoordinator.discardTurn(conversation_id);
+        await turnSnapshotCoordinator.discardTurn(conversation_id);
       }
       return { success: true };
     } catch (err: unknown) {
-      turnSnapshotCoordinator.discardTurn(conversation_id);
+      await turnSnapshotCoordinator.discardTurn(conversation_id);
       return {
         success: false,
         msg: err instanceof Error ? err.message : String(err),

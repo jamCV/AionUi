@@ -10,6 +10,7 @@ import type {
   TurnSnapshot,
   TurnSnapshotConflict,
   TurnSnapshotKeepResult,
+  TurnSnapshotLiveReason,
   TurnSnapshotRevertResult,
   TurnSnapshotSummary,
 } from '@/common/types/turnSnapshot';
@@ -95,6 +96,16 @@ export class TurnSnapshotService {
       };
     }
 
+    if (snapshot.lifecycleStatus === 'running') {
+      return {
+        success: false,
+        turnId,
+        reviewStatus: snapshot.reviewStatus,
+        snapshot,
+        msg: 'Turn snapshot is still running.',
+      };
+    }
+
     if (snapshot.reviewStatus === 'reverted') {
       return {
         success: false,
@@ -110,6 +121,7 @@ export class TurnSnapshotService {
     }
 
     const updatedSnapshot = (await this.repo.getTurnSnapshot(turnId)) ?? snapshot;
+    this.emitTurnSnapshotLive(updatedSnapshot, 'kept');
     return {
       success: true,
       turnId,
@@ -126,6 +138,17 @@ export class TurnSnapshotService {
         turnId,
         status: 'failed',
         msg: 'Turn snapshot not found.',
+      };
+    }
+
+    if (snapshot.lifecycleStatus === 'running') {
+      return {
+        success: false,
+        turnId,
+        status: 'failed',
+        reviewStatus: snapshot.reviewStatus,
+        snapshot,
+        msg: 'Turn snapshot is still running.',
       };
     }
 
@@ -245,6 +268,7 @@ export class TurnSnapshotService {
 
       await this.repo.updateTurnReviewStatus(turnId, 'reverted');
       const updatedSnapshot = (await this.repo.getTurnSnapshot(turnId)) ?? snapshot;
+      this.emitTurnSnapshotLive(updatedSnapshot, 'reverted');
 
       return {
         success: true,
@@ -257,6 +281,7 @@ export class TurnSnapshotService {
       const rollbackError = await this.rollbackFiles(workspace, rollbackStates);
       await this.repo.updateTurnReviewStatus(turnId, 'failed');
       const updatedSnapshot = (await this.repo.getTurnSnapshot(turnId)) ?? snapshot;
+      this.emitTurnSnapshotLive(updatedSnapshot, 'reverted');
       const msg = error instanceof Error ? error.message : String(error);
 
       return {
@@ -268,6 +293,30 @@ export class TurnSnapshotService {
         msg: rollbackError ? `${msg} Rollback failed: ${rollbackError}` : msg,
       };
     }
+  }
+
+  async autoKeepPendingTurn(conversationId: string): Promise<TurnSnapshot | undefined> {
+    const snapshots = await this.repo.getTurnSnapshotsByConversation(conversationId, 20);
+    const pendingSnapshot = snapshots.find(
+      (snapshot) => snapshot.reviewStatus === 'pending' && snapshot.lifecycleStatus !== 'running'
+    );
+    if (!pendingSnapshot) {
+      return undefined;
+    }
+
+    const updatedAt = Date.now();
+    await this.repo.updateTurnSnapshot({
+      turnId: pendingSnapshot.id,
+      reviewStatus: 'kept',
+      autoKeptAt: updatedAt,
+      updatedAt,
+    });
+
+    const updatedSnapshot = await this.repo.getTurnSnapshot(pendingSnapshot.id);
+    if (updatedSnapshot) {
+      this.emitTurnSnapshotLive(updatedSnapshot, 'auto-kept');
+    }
+    return updatedSnapshot;
   }
 
   private async rollbackFiles(workspace: string, rollbackStates: RollbackFileState[]): Promise<string | undefined> {
@@ -324,6 +373,14 @@ export class TurnSnapshotService {
       workspace,
       relativePath,
       operation,
+    });
+  }
+
+  private emitTurnSnapshotLive(snapshot: TurnSnapshot, reason: TurnSnapshotLiveReason): void {
+    ipcBridge.conversation.turnSnapshot.live.emit({
+      conversationId: snapshot.conversationId,
+      summary: snapshot,
+      reason,
     });
   }
 

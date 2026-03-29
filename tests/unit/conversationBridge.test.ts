@@ -4,17 +4,23 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getPath: vi.fn(() => '/tm
 
 // Capture provider handlers so tests can invoke them directly
 const handlers: Record<string, (...args: any[]) => any> = {};
-const { turnSnapshotServiceMock } = vi.hoisted(() => ({
+const { turnSnapshotServiceMock, turnSnapshotCoordinatorMock } = vi.hoisted(() => ({
   turnSnapshotServiceMock: {
     listTurnSnapshots: vi.fn(async () => []),
     getTurnSnapshot: vi.fn(async () => undefined),
     keepTurn: vi.fn(async () => ({ success: true, turnId: 'turn-1', reviewStatus: 'kept' as const })),
+    autoKeepPendingTurn: vi.fn(async () => undefined),
     revertTurn: vi.fn(async () => ({
       success: true,
       turnId: 'turn-1',
       status: 'reverted' as const,
       reviewStatus: 'reverted' as const,
     })),
+  },
+  turnSnapshotCoordinatorMock: {
+    startTurn: vi.fn(async () => undefined),
+    discardTurn: vi.fn(async () => undefined),
+    completeTurn: vi.fn(async () => undefined),
   },
 }));
 
@@ -82,6 +88,10 @@ vi.mock('../../src/process/bridge/services/TurnSnapshotService', () => ({
   turnSnapshotService: turnSnapshotServiceMock,
 }));
 
+vi.mock('../../src/process/bridge/services/TurnSnapshotCoordinator', () => ({
+  turnSnapshotCoordinator: turnSnapshotCoordinatorMock,
+}));
+
 vi.mock('../../src/agent/gemini', () => ({
   GeminiAgent: { buildFileServer: vi.fn(() => ({})) },
   GeminiApprovalStore: { createKeysFromConfirmation: vi.fn(() => []) },
@@ -144,12 +154,16 @@ describe('conversationBridge', () => {
     turnSnapshotServiceMock.listTurnSnapshots.mockResolvedValue([]);
     turnSnapshotServiceMock.getTurnSnapshot.mockResolvedValue(undefined);
     turnSnapshotServiceMock.keepTurn.mockResolvedValue({ success: true, turnId: 'turn-1', reviewStatus: 'kept' });
+    turnSnapshotServiceMock.autoKeepPendingTurn.mockResolvedValue(undefined);
     turnSnapshotServiceMock.revertTurn.mockResolvedValue({
       success: true,
       turnId: 'turn-1',
       status: 'reverted',
       reviewStatus: 'reverted',
     });
+    turnSnapshotCoordinatorMock.startTurn.mockResolvedValue(undefined);
+    turnSnapshotCoordinatorMock.discardTurn.mockResolvedValue(undefined);
+    turnSnapshotCoordinatorMock.completeTurn.mockResolvedValue(undefined);
     // Re-register providers by re-initializing the bridge
     service = makeService();
     taskManager = makeTaskManager();
@@ -279,6 +293,67 @@ describe('conversationBridge', () => {
       expect(result).toEqual({ success: true });
       // sendMessage should still be called with empty files array
       expect(mockTask.sendMessage).toHaveBeenCalled();
+    });
+
+    it('auto-keeps the previous pending turn before starting a tracked backend turn', async () => {
+      const conversation = { id: 'c1', type: 'codex', name: 'test', extra: { workspace: '/ws' } } as TChatConversation;
+      const mockTask = {
+        type: 'codex',
+        workspace: '/ws',
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+      };
+
+      vi.mocked(service.getConversation).mockResolvedValue(conversation);
+
+      const tm = makeTaskManager({
+        getOrBuildTask: vi.fn().mockResolvedValue(mockTask),
+      });
+      initConversationBridge(service, tm);
+
+      const result = await handlers['sendMessage']({
+        conversation_id: 'c1',
+        input: 'hello',
+        files: [],
+        msg_id: 'm1',
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(turnSnapshotServiceMock.autoKeepPendingTurn).toHaveBeenCalledWith('c1');
+      expect(turnSnapshotCoordinatorMock.startTurn).toHaveBeenCalledWith({
+        conversationId: 'c1',
+        backend: 'codex',
+        requestMessageId: 'm1',
+      });
+      expect(turnSnapshotServiceMock.autoKeepPendingTurn.mock.invocationCallOrder[0]).toBeLessThan(
+        turnSnapshotCoordinatorMock.startTurn.mock.invocationCallOrder[0]
+      );
+    });
+  });
+
+  describe('session cleanup auto-keep', () => {
+    it('auto-keeps before removing a conversation', async () => {
+      vi.mocked(service.getConversation).mockResolvedValue(makeConversation('c1'));
+
+      const result = await handlers['remove']({ id: 'c1' });
+
+      expect(result).toBe(true);
+      expect(turnSnapshotServiceMock.autoKeepPendingTurn).toHaveBeenCalledWith('c1');
+      expect(taskManager.kill).toHaveBeenCalledWith('c1');
+      expect(turnSnapshotServiceMock.autoKeepPendingTurn.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(taskManager.kill).mock.invocationCallOrder[0]
+      );
+      expect(service.deleteConversation).toHaveBeenCalledWith('c1');
+    });
+
+    it('auto-keeps before resetting a single conversation', async () => {
+      await handlers['reset']({ id: 'c1' });
+
+      expect(turnSnapshotServiceMock.autoKeepPendingTurn).toHaveBeenCalledWith('c1');
+      expect(taskManager.kill).toHaveBeenCalledWith('c1');
+      expect(turnSnapshotServiceMock.autoKeepPendingTurn.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(taskManager.kill).mock.invocationCallOrder[0]
+      );
+      expect(taskManager.clear).not.toHaveBeenCalled();
     });
   });
 

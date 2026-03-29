@@ -10,13 +10,6 @@ vi.mock('@/renderer/hooks/file/usePreviewLauncher', () => ({
   }),
 }));
 
-vi.mock('@arco-design/web-react', () => ({
-  Button: ({ children, onClick, disabled }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean }) =>
-    React.createElement('button', { disabled, onClick }, children),
-  Space: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-  Tag: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-}));
-
 vi.mock('@icon-park/react', () => ({
   Down: () => React.createElement('span', {}, 'Down'),
   PreviewOpen: () => React.createElement('span', {}, 'PreviewOpen'),
@@ -30,10 +23,6 @@ vi.mock('react-i18next', () => ({
       }
 
       const textMap: Record<string, string> = {
-        'messages.turnSnapshot.keep': 'Keep This Turn',
-        'messages.turnSnapshot.revert': 'Revert This Turn',
-        'messages.turnSnapshot.kept': 'Kept',
-        'messages.turnSnapshot.unsupported': 'Revert unavailable',
         'preview.preview': 'Preview',
       };
 
@@ -45,10 +34,6 @@ vi.mock('react-i18next', () => ({
 import MessageFileChanges from '@/renderer/pages/conversation/Messages/codex/MessageFileChanges';
 
 describe('MessageFileChanges', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   const diffsChanges = [
     {
       fileName: 'test.ts',
@@ -59,59 +44,38 @@ describe('MessageFileChanges', () => {
     },
   ];
 
-  it('renders keep and revert actions for pending turn snapshots', () => {
-    const handleKeepTurn = vi.fn();
-    const handleRevertTurn = vi.fn();
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-    render(
-      <MessageFileChanges
-        diffsChanges={diffsChanges}
-        turnId='turn-1'
-        turnReviewStatus='pending'
-        canKeep
-        canRevert
-        onKeepTurn={handleKeepTurn}
-        onRevertTurn={handleRevertTurn}
-      />
-    );
+  it('renders file changes without turn-level actions', () => {
+    render(<MessageFileChanges diffsChanges={diffsChanges} />);
 
     expect(screen.getByText('1 File Changes')).toBeTruthy();
-    expect(screen.getByText('Keep This Turn')).toBeTruthy();
-    expect(screen.getByText('Revert This Turn')).toBeTruthy();
-
-    fireEvent.click(screen.getByText('Keep This Turn'));
-    fireEvent.click(screen.getByText('Revert This Turn'));
-
-    expect(handleKeepTurn).toHaveBeenCalledTimes(1);
-    expect(handleRevertTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders unsupported turns as keep-only', () => {
-    const handleKeepTurn = vi.fn();
-
-    render(
-      <MessageFileChanges
-        diffsChanges={diffsChanges}
-        turnId='turn-unsupported'
-        turnReviewStatus='unsupported'
-        canKeep
-        canRevert={false}
-        onKeepTurn={handleKeepTurn}
-      />
-    );
-
-    expect(screen.getByText('Revert unavailable')).toBeTruthy();
-    expect(screen.getByText('Keep This Turn')).toBeTruthy();
-    expect(screen.queryByText('Revert This Turn')).toBeNull();
-  });
-
-  it('renders kept status without action buttons', () => {
-    render(
-      <MessageFileChanges diffsChanges={diffsChanges} turnId='turn-kept' turnReviewStatus='kept' canKeep={false} />
-    );
-
-    expect(screen.getByText('Kept')).toBeTruthy();
     expect(screen.queryByText('Keep This Turn')).toBeNull();
     expect(screen.queryByText('Revert This Turn')).toBeNull();
+  });
+
+  it('opens file preview and diff preview from the change list', () => {
+    render(<MessageFileChanges diffsChanges={diffsChanges} />);
+
+    fireEvent.click(screen.getByText('Preview'));
+    fireEvent.click(screen.getByText('+3'));
+
+    expect(mockLaunchPreview).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        relativePath: 'src/test.ts',
+        fileName: 'test.ts',
+      })
+    );
+    expect(mockLaunchPreview).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        fileName: 'test.ts',
+        contentType: 'diff',
+        editable: false,
+      })
+    );
   });
 });

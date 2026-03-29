@@ -186,6 +186,30 @@
   "contextUsage": {
     "contextUsed": "上下文已使用"
   },
+  "turnSummary": {
+    "title": "本輪摘要",
+    "expand": "展開",
+    "collapse": "收起",
+    "viewChanges": "查看變更",
+    "waitingForChanges": "本輪檔案變更仍在整理中。",
+    "noFiles": "目前還沒有檔案變更",
+    "lifecycle": {
+      "running": "進行中",
+      "completed": "已完成",
+      "interrupted": "已中斷"
+    },
+    "description": {
+      "running": "本輪仍在持續彙整檔案變更。",
+      "pending": "開始下一輪之前，請先確認這些變更。",
+      "interrupted": "本輪已中斷，但目前捕獲到的變更仍可繼續審閱。",
+      "unsupported": "本輪可以保留，但部分檔案暫不支援撤銷。",
+      "kept": "本輪變更已保留。",
+      "autoKept": "在下一輪開始前，這些變更已自動保留。",
+      "reverted": "本輪變更已撤銷。",
+      "conflict": "工作區內容已變更，無法直接撤銷本輪變更。",
+      "failed": "撤銷未能完整還原所有檔案。"
+    }
+  },
   "skill_generator": {
     "title": "Generate Skill/Rule",
     "generate": "Generate",

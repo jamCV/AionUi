@@ -8,15 +8,23 @@ import type { TurnReviewStatus, TurnSnapshot } from '../../../../src/common/type
 import { TurnSnapshotService } from '../../../../src/process/bridge/services/TurnSnapshotService';
 import type { IConversationRepository } from '../../../../src/process/services/database/IConversationRepository';
 
-const { emitMock } = vi.hoisted(() => ({
-  emitMock: vi.fn(),
+const { fileStreamEmitMock, liveEmitMock } = vi.hoisted(() => ({
+  fileStreamEmitMock: vi.fn(),
+  liveEmitMock: vi.fn(),
 }));
 
 vi.mock('@/common', () => ({
   ipcBridge: {
     fileStream: {
       contentUpdate: {
-        emit: emitMock,
+        emit: fileStreamEmitMock,
+      },
+    },
+    conversation: {
+      turnSnapshot: {
+        live: {
+          emit: liveEmitMock,
+        },
       },
     },
   },
@@ -54,9 +62,11 @@ const makeSnapshot = (): TurnSnapshot => ({
   completedAt: 20,
   completionSignal: 'finish',
   completionSource: 'end_turn',
+  lifecycleStatus: 'completed',
   reviewStatus: 'pending',
   fileCount: 3,
   sourceMessageIds: ['m1'],
+  lastActivityAt: 20,
   createdAt: 20,
   updatedAt: 20,
   files: [
@@ -142,6 +152,23 @@ function makeRepo(
       state.statusUpdates.push(status);
       if (state.snapshot) {
         state.snapshot.reviewStatus = status;
+        state.snapshot.updatedAt += 1;
+      }
+    }),
+    updateTurnSnapshot: vi.fn(async ({ reviewStatus, autoKeptAt, updatedAt }) => {
+      if (!state.snapshot) {
+        return;
+      }
+
+      if (reviewStatus) {
+        state.statusUpdates.push(reviewStatus);
+        state.snapshot.reviewStatus = reviewStatus;
+      }
+      if (autoKeptAt !== undefined) {
+        state.snapshot.autoKeptAt = autoKeptAt;
+      }
+      if (updatedAt !== undefined) {
+        state.snapshot.updatedAt = updatedAt;
       }
     }),
     getTurnSnapshotFiles: vi.fn(async () => cloneSnapshot(state.snapshot)?.files ?? []),
@@ -154,7 +181,8 @@ describe('TurnSnapshotService', () => {
   let workspace: string;
 
   beforeEach(() => {
-    emitMock.mockReset();
+    fileStreamEmitMock.mockReset();
+    liveEmitMock.mockReset();
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'turn-snapshot-service-'));
   });
 
@@ -174,6 +202,33 @@ describe('TurnSnapshotService', () => {
     expect(result.reviewStatus).toBe('kept');
     expect(state.statusUpdates).toEqual(['kept']);
     expect(state.snapshot?.reviewStatus).toBe('kept');
+    expect(liveEmitMock).toHaveBeenCalledWith({
+      conversationId: snapshot.conversationId,
+      summary: expect.objectContaining({
+        id: snapshot.id,
+        reviewStatus: 'kept',
+      }),
+      reason: 'kept',
+    });
+  });
+
+  it('does not keep a turn that is still running', async () => {
+    const conversation = makeConversation(workspace);
+    const snapshot = {
+      ...makeSnapshot(),
+      lifecycleStatus: 'running' as const,
+      completedAt: undefined,
+      completionSignal: undefined,
+    };
+    const { repo, state } = makeRepo(conversation, snapshot);
+    const service = new TurnSnapshotService(repo);
+
+    const result = await service.keepTurn(snapshot.id);
+
+    expect(result.success).toBe(false);
+    expect(result.msg).toBe('Turn snapshot is still running.');
+    expect(state.statusUpdates).toEqual([]);
+    expect(liveEmitMock).not.toHaveBeenCalled();
   });
 
   it('reverts create, update, and delete files atomically on success', async () => {
@@ -194,7 +249,15 @@ describe('TurnSnapshotService', () => {
     expect(fs.readFileSync(path.join(workspace, 'src/update.ts'), 'utf8')).toBe('before update\n');
     expect(fs.existsSync(path.join(workspace, 'src/create.ts'))).toBe(false);
     expect(fs.readFileSync(path.join(workspace, 'src/delete.ts'), 'utf8')).toBe('restore deleted file\n');
-    expect(emitMock).toHaveBeenCalledTimes(3);
+    expect(fileStreamEmitMock).toHaveBeenCalledTimes(3);
+    expect(liveEmitMock).toHaveBeenCalledWith({
+      conversationId: snapshot.conversationId,
+      summary: expect.objectContaining({
+        id: snapshot.id,
+        reviewStatus: 'reverted',
+      }),
+      reason: 'reverted',
+    });
   });
 
   it('marks the turn as conflict when workspace content no longer matches snapshot after-state', async () => {
@@ -254,5 +317,63 @@ describe('TurnSnapshotService', () => {
     expect(fs.readFileSync(path.join(workspace, 'src/update.ts'), 'utf8')).toBe('after update\n');
     expect(fs.readFileSync(path.join(workspace, 'src/create.ts'), 'utf8')).toBe('created by turn\n');
     expect(fs.existsSync(path.join(workspace, 'src/delete.ts'))).toBe(false);
+    expect(liveEmitMock).toHaveBeenCalledWith({
+      conversationId: snapshot.conversationId,
+      summary: expect.objectContaining({
+        id: snapshot.id,
+        reviewStatus: 'failed',
+      }),
+      reason: 'reverted',
+    });
+  });
+
+  it('auto-keeps the latest completed pending turn', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-29T09:30:00.000Z'));
+
+    const conversation = makeConversation(workspace);
+    const snapshot = makeSnapshot();
+    const { repo, state } = makeRepo(conversation, snapshot);
+    const service = new TurnSnapshotService(repo);
+
+    const result = await service.autoKeepPendingTurn(snapshot.conversationId);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: snapshot.id,
+        reviewStatus: 'kept',
+        autoKeptAt: Date.now(),
+      })
+    );
+    expect(state.statusUpdates).toEqual(['kept']);
+    expect(liveEmitMock).toHaveBeenCalledWith({
+      conversationId: snapshot.conversationId,
+      summary: expect.objectContaining({
+        id: snapshot.id,
+        reviewStatus: 'kept',
+        autoKeptAt: Date.now(),
+      }),
+      reason: 'auto-kept',
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('does not auto-keep a running pending turn', async () => {
+    const conversation = makeConversation(workspace);
+    const snapshot = {
+      ...makeSnapshot(),
+      lifecycleStatus: 'running' as const,
+      completedAt: undefined,
+      completionSignal: undefined,
+    };
+    const { repo, state } = makeRepo(conversation, snapshot);
+    const service = new TurnSnapshotService(repo);
+
+    const result = await service.autoKeepPendingTurn(snapshot.conversationId);
+
+    expect(result).toBeUndefined();
+    expect(state.statusUpdates).toEqual([]);
+    expect(liveEmitMock).not.toHaveBeenCalled();
   });
 });

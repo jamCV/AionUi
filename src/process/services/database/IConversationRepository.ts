@@ -13,10 +13,12 @@ import type { TMessage } from '@/common/chat/chatLib';
 import type { IMessageSearchResponse } from '@/common/types/database';
 import type {
   CreateTurnSnapshotInput,
+  CreateTurnSnapshotFileInput,
   TurnReviewStatus,
   TurnSnapshot,
   TurnSnapshotFile,
   TurnSnapshotSummary,
+  UpdateTurnSnapshotInput,
 } from './types';
 
 export type PaginatedResult<T> = {
@@ -42,8 +44,11 @@ export interface IConversationRepository {
   /** Full-text search across conversation messages. */
   searchMessages(keyword: string, page: number, pageSize: number): Promise<IMessageSearchResponse>;
   createTurnSnapshot(input: CreateTurnSnapshotInput): Promise<void>;
+  upsertTurnSnapshotFile(input: CreateTurnSnapshotFileInput): Promise<void>;
   getTurnSnapshot(turnId: string): Promise<TurnSnapshot | undefined>;
   getTurnSnapshotsByConversation(conversationId: string, limit?: number): Promise<TurnSnapshotSummary[]>;
+  updateTurnSnapshot(input: UpdateTurnSnapshotInput): Promise<void>;
   updateTurnReviewStatus(turnId: string, status: TurnReviewStatus): Promise<void>;
   getTurnSnapshotFiles(turnId: string): Promise<TurnSnapshotFile[]>;
+  deleteTurnSnapshot(turnId: string): Promise<void>;
 }

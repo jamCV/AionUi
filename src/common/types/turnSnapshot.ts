@@ -2,18 +2,23 @@ export type TurnReviewStatus = 'pending' | 'kept' | 'reverted' | 'conflict' | 'u
 
 export type TurnFileAction = 'create' | 'update' | 'delete';
 
+export type TurnLifecycleStatus = 'running' | 'completed' | 'interrupted';
+
 export type TurnSnapshotSummary = {
   id: string;
   conversationId: string;
   backend: string;
   requestMessageId?: string;
   startedAt: number;
-  completedAt: number;
-  completionSignal: string;
+  completedAt?: number;
+  completionSignal?: string;
   completionSource?: string;
+  lifecycleStatus: TurnLifecycleStatus;
   reviewStatus: TurnReviewStatus;
   fileCount: number;
   sourceMessageIds: string[];
+  lastActivityAt: number;
+  autoKeptAt?: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -41,6 +46,21 @@ export type TurnSnapshotFile = {
 
 export type TurnSnapshot = TurnSnapshotSummary & {
   files: TurnSnapshotFile[];
+};
+
+export type TurnSnapshotLiveReason =
+  | 'started'
+  | 'file-updated'
+  | 'completed'
+  | 'interrupted'
+  | 'kept'
+  | 'reverted'
+  | 'auto-kept';
+
+export type TurnSnapshotLiveEvent = {
+  conversationId: string;
+  summary: TurnSnapshot;
+  reason: TurnSnapshotLiveReason;
 };
 
 export type TurnSnapshotConflict = {
