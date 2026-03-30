@@ -556,6 +556,14 @@ export const database = {
     import('@/common/chat/chatLib').TMessage[],
     { conversation_id: string; page?: number; pageSize?: number }
   >('database.get-conversation-messages'),
+  getConversationMessagesPage: bridge.buildProvider<
+    import('../types/database').IConversationMessagesPage,
+    { conversation_id: string; page?: number; pageSize?: number }
+  >('database.get-conversation-messages-page'),
+  getConversationMessageLocation: bridge.buildProvider<
+    import('../types/database').IConversationMessageLocation,
+    { conversation_id: string; message_id: string; pageSize?: number }
+  >('database.get-conversation-message-location'),
   getUserConversations: bridge.buildProvider<
     import('@/common/config/storage').TChatConversation[],
     { page?: number; pageSize?: number }

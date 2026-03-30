@@ -15,6 +15,7 @@
   "downloadFailed": "다운로드 실패",
   "imageLoadFailed": "이미지 로드 실패",
   "scrollToBottom": "맨 아래로 스크롤",
+  "loadOlderMessages": "이전 메시지 불러오기",
   "availableCommands": "{{count}}개의 사용 가능한 명령어",
   "slash.title": "명령어",
   "slash.hint": "/를 입력해 명령 메뉴를 열기",

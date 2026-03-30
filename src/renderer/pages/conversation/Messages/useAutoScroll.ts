@@ -48,6 +48,8 @@ export function useAutoScroll({ messages, itemCount }: UseAutoScrollOptions): Us
   const userScrolledRef = useRef(false);
   const lastScrollTopRef = useRef(0);
   const previousListLengthRef = useRef(messages.length);
+  const previousFirstMessageIdRef = useRef(messages[0]?.id);
+  const previousLastMessageIdRef = useRef(messages[messages.length - 1]?.id);
   const lastProgrammaticScrollTimeRef = useRef(0);
 
   // Scroll to bottom helper - only for user messages and button clicks
@@ -105,11 +107,22 @@ export function useAutoScroll({ messages, itemCount }: UseAutoScrollOptions): Us
   useEffect(() => {
     const currentListLength = messages.length;
     const prevLength = previousListLengthRef.current;
+    const currentFirstMessageId = messages[0]?.id;
+    const currentLastMessageId = messages[messages.length - 1]?.id;
+    const previousFirstMessageId = previousFirstMessageIdRef.current;
+    const previousLastMessageId = previousLastMessageIdRef.current;
     const isNewMessage = currentListLength > prevLength;
+    const isPrependedHistory =
+      isNewMessage &&
+      prevLength > 0 &&
+      currentFirstMessageId !== previousFirstMessageId &&
+      currentLastMessageId === previousLastMessageId;
 
     previousListLengthRef.current = currentListLength;
+    previousFirstMessageIdRef.current = currentFirstMessageId;
+    previousLastMessageIdRef.current = currentLastMessageId;
 
-    if (!isNewMessage) return;
+    if (!isNewMessage || isPrependedHistory) return;
 
     const lastMessage = messages[messages.length - 1];
 

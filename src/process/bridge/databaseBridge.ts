@@ -5,6 +5,7 @@
  */
 
 import { ipcBridge } from '@/common';
+import type { IConversationMessageLocation } from '@/common/types/database';
 import { ProcessChat } from '@process/utils/initStorage';
 import type { TChatConversation } from '@/common/config/storage';
 import { migrateConversationToDatabase } from './migrationUtils';
@@ -21,6 +22,48 @@ export function initDatabaseBridge(repo: IConversationRepository): void {
       return [];
     }
   });
+
+  ipcBridge.database.getConversationMessagesPage.provider(async ({ conversation_id, page = 0, pageSize = 100 }) => {
+    try {
+      const result = await repo.getMessages(conversation_id, page, pageSize);
+      return {
+        items: result.data,
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+        hasMore: result.hasMore,
+      };
+    } catch (error) {
+      console.error('[DatabaseBridge] Error getting paginated conversation messages:', error);
+      return {
+        items: [],
+        total: 0,
+        page,
+        pageSize,
+        hasMore: false,
+      };
+    }
+  });
+
+  ipcBridge.database.getConversationMessageLocation.provider(
+    async ({ conversation_id, message_id, pageSize = 100 }): Promise<IConversationMessageLocation> => {
+      try {
+        return await repo.getMessageLocation(conversation_id, message_id, pageSize);
+      } catch (error) {
+        console.error('[DatabaseBridge] Error getting conversation message location:', error);
+        return {
+          conversationId: conversation_id,
+          messageId: message_id,
+          page: 0,
+          pageSize,
+          total: 0,
+          indexWithinPage: -1,
+          absoluteIndex: -1,
+          found: false,
+        };
+      }
+    }
+  );
 
   // Get user conversations from database with lazy migration from file storage
   ipcBridge.database.getUserConversations.provider(async ({ page = 0, pageSize = 10000 }) => {

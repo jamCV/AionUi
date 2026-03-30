@@ -7,30 +7,192 @@
 import { ipcBridge } from '@/common';
 import type { TMessage } from '@/common/chat/chatLib';
 import { composeMessage } from '@/common/chat/chatLib';
-import { useCallback, useEffect, useRef } from 'react';
-import { createContext } from '@renderer/utils/ui/createContext';
+import type { IConversationMessageLocation } from '@/common/types/database';
+import { useConversationContext, useConversationContextSafe } from '@renderer/hooks/context/ConversationContext';
+import { Fragment, createElement, useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import type { FC, PropsWithChildren } from 'react';
 
-const [useMessageList, MessageListProvider, useUpdateMessageList] = createContext([] as TMessage[]);
+const MESSAGE_PAGE_SIZE = 50;
+const MAX_RETAINED_CONVERSATIONS = 5;
 
-const [useChatKey, ChatKeyProvider] = createContext('');
+type ConversationMessagesSnapshot = {
+  items: TMessage[];
+  total: number;
+  pageSize: number;
+  loadedPages: number[];
+  oldestLoadedPage: number | null;
+  latestLoadedPage: number | null;
+  hasOlder: boolean;
+  hydrated: boolean;
+  isInitialLoading: boolean;
+  isLoadingOlder: boolean;
+};
+
+type ConversationMessagesEntry = {
+  snapshot: ConversationMessagesSnapshot;
+  listeners: Set<() => void>;
+  lastAccessedAt: number;
+  initialLoadPromise?: Promise<void>;
+  olderLoadPromise?: Promise<void>;
+};
+
+type MessageListUpdater = TMessage[] | ((value: TMessage[]) => TMessage[]);
+
+type MessageIndex = {
+  msgIdIndex: Map<string, number>;
+  callIdIndex: Map<string, number>;
+  toolCallIdIndex: Map<string, number>;
+};
 
 const beforeUpdateMessageListStack: Array<(list: TMessage[]) => TMessage[]> = [];
+const indexCache = new WeakMap<TMessage[], MessageIndex>();
+const conversationMessagesStore = new Map<string, ConversationMessagesEntry>();
 
-// 消息索引缓存类型定义
-// Message index cache type definitions
-interface MessageIndex {
-  msgIdIndex: Map<string, number>; // msg_id -> index
-  callIdIndex: Map<string, number>; // tool_call.callId -> index
-  toolCallIdIndex: Map<string, number>; // codex_tool_call.toolCallId / acp_tool_call.toolCallId -> index
+const EMPTY_SNAPSHOT: ConversationMessagesSnapshot = {
+  items: [],
+  total: 0,
+  pageSize: MESSAGE_PAGE_SIZE,
+  loadedPages: [],
+  oldestLoadedPage: null,
+  latestLoadedPage: null,
+  hasOlder: false,
+  hydrated: false,
+  isInitialLoading: false,
+  isLoadingOlder: false,
+};
+
+const createEmptySnapshot = (): ConversationMessagesSnapshot => ({
+  items: [],
+  total: 0,
+  pageSize: MESSAGE_PAGE_SIZE,
+  loadedPages: [],
+  oldestLoadedPage: null,
+  latestLoadedPage: null,
+  hasOlder: false,
+  hydrated: false,
+  isInitialLoading: false,
+  isLoadingOlder: false,
+});
+
+const createConversationMessagesEntry = (): ConversationMessagesEntry => ({
+  snapshot: createEmptySnapshot(),
+  listeners: new Set(),
+  lastAccessedAt: Date.now(),
+});
+
+const getLoadedPagesWithPage = (loadedPages: number[], page: number): number[] => {
+  return Array.from(new Set([...loadedPages, page])).sort((a, b) => a - b);
+};
+
+const ensureConversationMessagesEntry = (conversationId: string): ConversationMessagesEntry => {
+  const existing = conversationMessagesStore.get(conversationId);
+  if (existing) {
+    return existing;
+  }
+  const created = createConversationMessagesEntry();
+  conversationMessagesStore.set(conversationId, created);
+  return created;
+};
+
+const notifyConversationMessagesEntry = (entry: ConversationMessagesEntry) => {
+  entry.listeners.forEach((listener) => listener());
+};
+
+const setConversationMessagesSnapshot = (
+  conversationId: string,
+  updater: (snapshot: ConversationMessagesSnapshot) => ConversationMessagesSnapshot
+) => {
+  const entry = ensureConversationMessagesEntry(conversationId);
+  const nextSnapshot = updater(entry.snapshot);
+  if (nextSnapshot === entry.snapshot) {
+    return;
+  }
+  entry.snapshot = nextSnapshot;
+  notifyConversationMessagesEntry(entry);
+};
+
+const touchConversationMessagesEntry = (conversationId: string) => {
+  const entry = ensureConversationMessagesEntry(conversationId);
+  entry.lastAccessedAt = Date.now();
+  pruneConversationMessagesStore(conversationId);
+};
+
+function pruneConversationMessagesStore(activeConversationId?: string) {
+  if (conversationMessagesStore.size <= MAX_RETAINED_CONVERSATIONS) {
+    return;
+  }
+
+  const removableEntries = Array.from(conversationMessagesStore.entries())
+    .filter(([conversationId, entry]) => {
+      if (conversationId === activeConversationId) {
+        return false;
+      }
+      if (entry.listeners.size > 0) {
+        return false;
+      }
+      if (entry.initialLoadPromise || entry.olderLoadPromise) {
+        return false;
+      }
+      return true;
+    })
+    .sort(([, left], [, right]) => left.lastAccessedAt - right.lastAccessedAt);
+
+  while (conversationMessagesStore.size > MAX_RETAINED_CONVERSATIONS && removableEntries.length > 0) {
+    const removable = removableEntries.shift();
+    if (!removable) {
+      break;
+    }
+    conversationMessagesStore.delete(removable[0]);
+  }
 }
 
-// 使用 WeakMap 缓存索引，当列表被 GC 时自动清理
-// Use WeakMap to cache index, auto-cleanup when list is GC'd
-const indexCache = new WeakMap<TMessage[], MessageIndex>();
+const subscribeConversationMessages = (conversationId: string, listener: () => void) => {
+  const entry = ensureConversationMessagesEntry(conversationId);
+  entry.listeners.add(listener);
+  return () => {
+    entry.listeners.delete(listener);
+  };
+};
 
-// 构建消息索引
-// Build message index
-function buildMessageIndex(list: TMessage[]): MessageIndex {
+const getConversationMessagesSnapshot = (conversationId: string): ConversationMessagesSnapshot => {
+  return ensureConversationMessagesEntry(conversationId).snapshot;
+};
+
+const mergeDatabaseMessagesWithCurrent = (databaseMessages: TMessage[], currentMessages: TMessage[]): TMessage[] => {
+  if (!currentMessages.length) {
+    return databaseMessages;
+  }
+  if (!databaseMessages.length) {
+    return currentMessages;
+  }
+
+  const databaseIds = new Set(databaseMessages.map((message) => message.id));
+  const databaseMsgIds = new Set(databaseMessages.map((message) => message.msg_id).filter(Boolean));
+  const streamingOnlyMessages = currentMessages.filter(
+    (message) => !databaseIds.has(message.id) && !(message.msg_id && databaseMsgIds.has(message.msg_id))
+  );
+
+  return streamingOnlyMessages.length > 0 ? [...databaseMessages, ...streamingOnlyMessages] : databaseMessages;
+};
+
+const prependOlderMessages = (olderMessages: TMessage[], currentMessages: TMessage[]): TMessage[] => {
+  if (!olderMessages.length) {
+    return currentMessages;
+  }
+  if (!currentMessages.length) {
+    return olderMessages;
+  }
+
+  const olderIds = new Set(olderMessages.map((message) => message.id));
+  const olderMsgIds = new Set(olderMessages.map((message) => message.msg_id).filter(Boolean));
+  const remainingMessages = currentMessages.filter(
+    (message) => !olderIds.has(message.id) && !(message.msg_id && olderMsgIds.has(message.msg_id))
+  );
+
+  return [...olderMessages, ...remainingMessages];
+};
+
+const buildMessageIndex = (list: TMessage[]): MessageIndex => {
   const msgIdIndex = new Map<string, number>();
   const callIdIndex = new Map<string, number>();
   const toolCallIdIndex = new Map<string, number>();
@@ -50,39 +212,29 @@ function buildMessageIndex(list: TMessage[]): MessageIndex {
   }
 
   return { msgIdIndex, callIdIndex, toolCallIdIndex };
-}
+};
 
-// 获取或构建索引（带缓存）
-// Get or build index with caching
-function getOrBuildIndex(list: TMessage[]): MessageIndex {
+const getOrBuildIndex = (list: TMessage[]): MessageIndex => {
   let cached = indexCache.get(list);
   if (!cached) {
     cached = buildMessageIndex(list);
     indexCache.set(list, cached);
   }
   return cached;
-}
+};
 
-// 使用索引优化的消息合并函数
-// Index-optimized message compose function
-function composeMessageWithIndex(message: TMessage, list: TMessage[], index: MessageIndex): TMessage[] {
+const composeMessageWithIndex = (message: TMessage, list: TMessage[], index: MessageIndex): TMessage[] => {
   if (!message) return list || [];
   if (!list?.length) {
-    // Update index when adding first message
     if (message.msg_id) {
       index.msgIdIndex.set(message.msg_id, 0);
     }
     return [message];
   }
 
-  // 对于 tool_group 类型，使用原始的 composeMessage（因为涉及内部数组匹配）
-  // For tool_group type, use original composeMessage (involves inner array matching)
-  // After composeMessage, the returned list may have different length/ordering,
-  // so we must invalidate the index to prevent stale lookups in subsequent calls.
   if (message.type === 'tool_group') {
     const result = composeMessage(message, list);
     if (result !== list) {
-      // Rebuild index maps from the new list to keep them in sync
       const rebuilt = buildMessageIndex(result);
       index.msgIdIndex = rebuilt.msgIdIndex;
       index.callIdIndex = rebuilt.callIdIndex;
@@ -91,8 +243,6 @@ function composeMessageWithIndex(message: TMessage, list: TMessage[], index: Mes
     return result;
   }
 
-  // tool_call: 使用 callIdIndex 快速查找
-  // tool_call: use callIdIndex for fast lookup
   if (message.type === 'tool_call' && message.content?.callId) {
     const existingIdx = index.callIdIndex.get(message.content.callId);
     if (existingIdx !== undefined && existingIdx < list.length) {
@@ -104,15 +254,12 @@ function composeMessageWithIndex(message: TMessage, list: TMessage[], index: Mes
         return newList;
       }
     }
-    // 未找到，添加新消息并更新索引
     const newIdx = list.length;
     index.callIdIndex.set(message.content.callId, newIdx);
     if (message.msg_id) index.msgIdIndex.set(message.msg_id, newIdx);
     return list.concat(message);
   }
 
-  // codex_tool_call: 使用 toolCallIdIndex 快速查找
-  // codex_tool_call: use toolCallIdIndex for fast lookup
   if (message.type === 'codex_tool_call' && message.content?.toolCallId) {
     const existingIdx = index.toolCallIdIndex.get(message.content.toolCallId);
     if (existingIdx !== undefined && existingIdx < list.length) {
@@ -124,15 +271,12 @@ function composeMessageWithIndex(message: TMessage, list: TMessage[], index: Mes
         return newList;
       }
     }
-    // 未找到，添加新消息并更新索引
     const newIdx = list.length;
     index.toolCallIdIndex.set(message.content.toolCallId, newIdx);
     if (message.msg_id) index.msgIdIndex.set(message.msg_id, newIdx);
     return list.concat(message);
   }
 
-  // acp_tool_call: 使用 toolCallIdIndex 快速查找
-  // acp_tool_call: use toolCallIdIndex for fast lookup
   if (message.type === 'acp_tool_call' && message.content?.update?.toolCallId) {
     const existingIdx = index.toolCallIdIndex.get(message.content.update.toolCallId);
     if (existingIdx !== undefined && existingIdx < list.length) {
@@ -144,25 +288,20 @@ function composeMessageWithIndex(message: TMessage, list: TMessage[], index: Mes
         return newList;
       }
     }
-    // 未找到，添加新消息并更新索引
     const newIdx = list.length;
     index.toolCallIdIndex.set(message.content.update.toolCallId, newIdx);
     if (message.msg_id) index.msgIdIndex.set(message.msg_id, newIdx);
     return list.concat(message);
   }
 
-  // text message: use msgIdIndex for fast lookup (handles interleaved messages)
-  // text 消息: 使用 msgIdIndex 快速查找（处理消息交错的情况）
   if (message.type === 'text' && message.msg_id) {
     const existingIdx = index.msgIdIndex.get(message.msg_id);
     if (existingIdx !== undefined && existingIdx < list.length) {
       const existingMsg = list[existingIdx];
       if (existingMsg.type === 'text') {
-        // User messages (right position) are complete — skip if already exists to prevent duplicates
         if (message.position === 'right') {
           return list;
         }
-        // AI streaming messages (left position) — append chunks
         const newList = list.slice();
         newList[existingIdx] = {
           ...existingMsg,
@@ -174,14 +313,11 @@ function composeMessageWithIndex(message: TMessage, list: TMessage[], index: Mes
         return newList;
       }
     }
-    // Not found in index, add as new message
     const newIdx = list.length;
     index.msgIdIndex.set(message.msg_id, newIdx);
     return list.concat(message);
   }
 
-  // agent_status / tips / plan and other msg_id-based messages:
-  // replace the existing item in place instead of appending duplicates.
   if (message.msg_id) {
     const existingIdx = index.msgIdIndex.get(message.msg_id);
     if (existingIdx !== undefined && existingIdx < list.length) {
@@ -196,27 +332,312 @@ function composeMessageWithIndex(message: TMessage, list: TMessage[], index: Mes
     }
   }
 
-  // Other types: fallback to last message check
-  // 其他类型: 回退到检查最后一条消息
   const last = list[list.length - 1];
   if (last.msg_id !== message.msg_id || last.type !== message.type) {
-    // Add new message and update index
     const newIdx = list.length;
     if (message.msg_id) index.msgIdIndex.set(message.msg_id, newIdx);
     return list.concat(message);
   }
 
-  // Merge other message types with same msg_id
   const newList = list.slice();
   const lastIdx = newList.length - 1;
   newList[lastIdx] = { ...last, ...message };
   return newList;
-}
+};
+
+export type HydrateConversationMessagesOptions =
+  | {
+      mode?: 'latest';
+    }
+  | {
+      mode: 'targeted';
+      targetMessageId: string;
+      targetPage?: number;
+    };
+
+type ResolvedHydrateTarget = {
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+const resolveTargetHydrateTarget = async (
+  conversationId: string,
+  options: Extract<HydrateConversationMessagesOptions, { mode: 'targeted' }>
+): Promise<ResolvedHydrateTarget> => {
+  if (options.targetPage !== undefined) {
+    return {
+      page: Math.max(0, options.targetPage),
+      pageSize: MESSAGE_PAGE_SIZE,
+      total: 0,
+    };
+  }
+
+  const location = await ipcBridge.database.getConversationMessageLocation.invoke({
+    conversation_id: conversationId,
+    message_id: options.targetMessageId,
+    pageSize: MESSAGE_PAGE_SIZE,
+  });
+
+  const typedLocation = location as IConversationMessageLocation;
+  if (!typedLocation.found) {
+    throw new Error(`Target message not found: ${options.targetMessageId}`);
+  }
+
+  return {
+    page: typedLocation.page,
+    pageSize: typedLocation.pageSize || MESSAGE_PAGE_SIZE,
+    total: typedLocation.total,
+  };
+};
+
+const hydrateConversationMessages = async (
+  conversationId: string,
+  options: HydrateConversationMessagesOptions = { mode: 'latest' }
+): Promise<void> => {
+  if (!conversationId) {
+    return;
+  }
+
+  touchConversationMessagesEntry(conversationId);
+  const entry = ensureConversationMessagesEntry(conversationId);
+  if (entry.snapshot.hydrated) {
+    if (options.mode !== 'targeted') {
+      return;
+    }
+    if (options.targetPage !== undefined && entry.snapshot.loadedPages.includes(options.targetPage)) {
+      return;
+    }
+  }
+  if (entry.initialLoadPromise) {
+    return entry.initialLoadPromise;
+  }
+
+  setConversationMessagesSnapshot(conversationId, (current) => ({
+    ...current,
+    isInitialLoading: true,
+  }));
+
+  entry.initialLoadPromise = (async () => {
+    try {
+      const target =
+        options.mode === 'targeted' ? await resolveTargetHydrateTarget(conversationId, options) : undefined;
+      const pageSize = target?.pageSize || MESSAGE_PAGE_SIZE;
+
+      const firstPage = await ipcBridge.database.getConversationMessagesPage.invoke({
+        conversation_id: conversationId,
+        page: 0,
+        pageSize,
+      });
+
+      const total = target?.total || firstPage.total || 0;
+      const lastPage = total > 0 ? Math.max(0, Math.ceil(total / pageSize) - 1) : 0;
+      const requestedPage = target?.page ?? lastPage;
+      const normalizedRequestedPage = Math.max(0, Math.min(requestedPage, lastPage));
+      const hydratedPage =
+        normalizedRequestedPage === (firstPage.page ?? 0)
+          ? firstPage
+          : await ipcBridge.database.getConversationMessagesPage.invoke({
+              conversation_id: conversationId,
+              page: normalizedRequestedPage,
+              pageSize,
+            });
+
+      setConversationMessagesSnapshot(conversationId, (current) => {
+        const loadedPage = hydratedPage.page ?? normalizedRequestedPage;
+        const items = mergeDatabaseMessagesWithCurrent(hydratedPage.items ?? [], current.items);
+        return {
+          ...current,
+          items,
+          total: Math.max(hydratedPage.total ?? total, items.length),
+          pageSize: hydratedPage.pageSize ?? pageSize,
+          loadedPages: [loadedPage],
+          oldestLoadedPage: loadedPage,
+          latestLoadedPage: loadedPage,
+          hasOlder: loadedPage > 0,
+          hydrated: true,
+          isInitialLoading: false,
+          isLoadingOlder: false,
+        };
+      });
+    } catch (error) {
+      console.error('[Messages] Failed to hydrate conversation messages:', error);
+      setConversationMessagesSnapshot(conversationId, (current) => ({
+        ...current,
+        hydrated: current.items.length > 0,
+        isInitialLoading: false,
+      }));
+    } finally {
+      entry.initialLoadPromise = undefined;
+      touchConversationMessagesEntry(conversationId);
+    }
+  })();
+
+  return entry.initialLoadPromise;
+};
+
+const loadOlderConversationMessages = async (conversationId: string): Promise<void> => {
+  if (!conversationId) {
+    return;
+  }
+
+  touchConversationMessagesEntry(conversationId);
+  const entry = ensureConversationMessagesEntry(conversationId);
+  if (!entry.snapshot.hydrated) {
+    await hydrateConversationMessages(conversationId);
+  }
+
+  const currentSnapshot = ensureConversationMessagesEntry(conversationId).snapshot;
+  if (!currentSnapshot.hasOlder || currentSnapshot.oldestLoadedPage === null || currentSnapshot.oldestLoadedPage <= 0) {
+    return;
+  }
+  if (entry.olderLoadPromise) {
+    return entry.olderLoadPromise;
+  }
+
+  const targetPage = currentSnapshot.oldestLoadedPage - 1;
+  setConversationMessagesSnapshot(conversationId, (current) => ({
+    ...current,
+    isLoadingOlder: true,
+  }));
+
+  entry.olderLoadPromise = (async () => {
+    try {
+      const result = await ipcBridge.database.getConversationMessagesPage.invoke({
+        conversation_id: conversationId,
+        page: targetPage,
+        pageSize: currentSnapshot.pageSize || MESSAGE_PAGE_SIZE,
+      });
+
+      setConversationMessagesSnapshot(conversationId, (current) => {
+        const loadedPage = result.page ?? targetPage;
+        if (current.loadedPages.includes(loadedPage)) {
+          return {
+            ...current,
+            total: Math.max(result.total ?? current.total, current.items.length),
+            pageSize: result.pageSize ?? current.pageSize,
+            hasOlder: (current.oldestLoadedPage ?? loadedPage) > 0,
+            isLoadingOlder: false,
+          };
+        }
+
+        const loadedPages = getLoadedPagesWithPage(current.loadedPages, loadedPage);
+        const oldestLoadedPage = loadedPages[0] ?? loadedPage;
+        const latestLoadedPage = loadedPages[loadedPages.length - 1] ?? loadedPage;
+        const items = prependOlderMessages(result.items ?? [], current.items);
+
+        return {
+          ...current,
+          items,
+          total: Math.max(result.total ?? current.total, items.length),
+          pageSize: result.pageSize ?? current.pageSize,
+          loadedPages,
+          oldestLoadedPage,
+          latestLoadedPage,
+          hasOlder: oldestLoadedPage > 0,
+          hydrated: true,
+          isLoadingOlder: false,
+        };
+      });
+    } catch (error) {
+      console.error('[Messages] Failed to load older conversation messages:', error);
+      setConversationMessagesSnapshot(conversationId, (current) => ({
+        ...current,
+        isLoadingOlder: false,
+      }));
+    } finally {
+      entry.olderLoadPromise = undefined;
+      touchConversationMessagesEntry(conversationId);
+    }
+  })();
+
+  return entry.olderLoadPromise;
+};
+
+export const useConversationMessagesState = (conversationId?: string): ConversationMessagesSnapshot => {
+  const conversationContext = useConversationContextSafe();
+  const resolvedConversationId = conversationId ?? conversationContext?.conversationId ?? '';
+
+  useEffect(() => {
+    if (!resolvedConversationId) {
+      return;
+    }
+    touchConversationMessagesEntry(resolvedConversationId);
+  }, [resolvedConversationId]);
+
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!resolvedConversationId) {
+        return () => {};
+      }
+      return subscribeConversationMessages(resolvedConversationId, listener);
+    },
+    [resolvedConversationId]
+  );
+
+  const getSnapshot = useCallback(() => {
+    if (!resolvedConversationId) {
+      return EMPTY_SNAPSHOT;
+    }
+    return getConversationMessagesSnapshot(resolvedConversationId);
+  }, [resolvedConversationId]);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+};
+
+export const useConversationMessagePagination = (conversationId?: string) => {
+  const conversationContext = useConversationContextSafe();
+  const resolvedConversationId = conversationId ?? conversationContext?.conversationId ?? '';
+  const snapshot = useConversationMessagesState(resolvedConversationId);
+
+  const hydrate = useCallback(() => {
+    if (!resolvedConversationId) {
+      return Promise.resolve();
+    }
+    return hydrateConversationMessages(resolvedConversationId);
+  }, [resolvedConversationId]);
+
+  const loadOlder = useCallback(() => {
+    if (!resolvedConversationId) {
+      return Promise.resolve();
+    }
+    return loadOlderConversationMessages(resolvedConversationId);
+  }, [resolvedConversationId]);
+
+  return {
+    ...snapshot,
+    hydrate,
+    loadOlder,
+  };
+};
+
+export const useMessageList = () => {
+  return useConversationMessagesState().items;
+};
+
+export const useUpdateMessageList = () => {
+  const { conversationId } = useConversationContext();
+
+  return useCallback(
+    (value: MessageListUpdater) => {
+      setConversationMessagesSnapshot(conversationId, (current) => {
+        const items = typeof value === 'function' ? value(current.items) : value;
+        return {
+          ...current,
+          items,
+          total: Math.max(current.total, items.length),
+        };
+      });
+      touchConversationMessagesEntry(conversationId);
+    },
+    [conversationId]
+  );
+};
 
 export const useAddOrUpdateMessage = () => {
   const update = useUpdateMessageList();
   const pendingRef = useRef<Array<{ message: TMessage; add: boolean }>>([]);
-  const rafRef = useRef<any | null>(null);
+  const rafRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flush = useCallback(() => {
     rafRef.current = null;
@@ -225,15 +646,11 @@ export const useAddOrUpdateMessage = () => {
     if (!pending.length) return;
     pendingRef.current = [];
     update((list) => {
-      // 获取或构建索引用于快速查找 (O(1) instead of O(n))
-      // Get or build index for fast lookup
       const index = getOrBuildIndex(list);
       let newList = list;
 
       for (const item of pending) {
         if (item.add) {
-          // 新增消息，更新索引
-          // New message, update index
           const msg = item.message;
           const newIdx = newList.length;
           if (msg.msg_id) index.msgIdIndex.set(msg.msg_id, newIdx);
@@ -248,20 +665,22 @@ export const useAddOrUpdateMessage = () => {
           }
           newList = newList.concat(msg);
         } else {
-          // 使用索引优化的消息合并
-          // Use index-optimized message compose
           newList = composeMessageWithIndex(item.message, newList, index);
         }
 
         while (beforeUpdateMessageListStack.length) {
-          newList = beforeUpdateMessageListStack.shift()!(newList);
+          const updater = beforeUpdateMessageListStack.shift();
+          if (!updater) {
+            break;
+          }
+          newList = updater(newList);
         }
       }
       return newList;
     });
 
     rafRef.current = setTimeout(flush);
-  }, []);
+  }, [update]);
 
   useEffect(() => {
     return () => {
@@ -282,51 +701,66 @@ export const useAddOrUpdateMessage = () => {
   );
 };
 
-export const useMessageLstCache = (key: string) => {
-  const update = useUpdateMessageList();
+export const useMessageLstCache = (key: string, options: HydrateConversationMessagesOptions = { mode: 'latest' }) => {
   useEffect(() => {
-    if (!key) return;
-    void ipcBridge.database.getConversationMessages
-      .invoke({
-        conversation_id: key,
-        page: 0,
-        pageSize: 10000, // Load all messages (up to 10k per conversation)
-      })
-      .then((messages) => {
-        if (messages && Array.isArray(messages)) {
-          // Merge DB messages with any real-time streaming messages already in the list.
-          // This prevents a race condition where streaming messages (added via IPC before
-          // the DB load completes) could cause DB-only messages (e.g. cron user messages
-          // whose IPC event was emitted before the component mounted) to be lost.
-          // Use both msg_id and id for deduplication since DB messages and streaming
-          // messages share the same msg_id but may have different id values
-          // (streaming messages get new UUIDs from transformMessage).
-          update((currentList) => {
-            if (!currentList.length) return messages;
-            // Only keep streaming messages that belong to the current conversation
-            // to prevent messages from a previous conversation leaking into the new one
-            const sameConversation = currentList.filter((m) => m.conversation_id === key);
-            if (!sameConversation.length) return messages;
-            const dbIds = new Set(messages.map((m) => m.id));
-            const dbMsgIds = new Set(messages.map((m) => m.msg_id).filter(Boolean));
-            const streamingOnly = sameConversation.filter(
-              (m) => !dbIds.has(m.id) && !(m.msg_id && dbMsgIds.has(m.msg_id))
-            );
-            if (!streamingOnly.length) return messages;
-            return [...messages, ...streamingOnly];
-          });
-        }
-      })
-      .catch((error) => {
-        console.error('[useMessageLstCache] Failed to load messages from database:', error);
-      });
-  }, [key]);
+    if (!key) {
+      return;
+    }
+    void hydrateConversationMessages(key, options);
+  }, [
+    key,
+    options.mode,
+    options.mode === 'targeted' ? options.targetMessageId : undefined,
+    options.mode === 'targeted' ? options.targetPage : undefined,
+  ]);
+};
+
+export const refreshConversationMessages = async (
+  conversationId: string,
+  options: HydrateConversationMessagesOptions = { mode: 'latest' }
+): Promise<void> => {
+  if (!conversationId) {
+    return;
+  }
+
+  setConversationMessagesSnapshot(conversationId, () => createEmptySnapshot());
+  return hydrateConversationMessages(conversationId, options);
+};
+
+export const hydrateConversationMessageTarget = async (
+  conversationId: string,
+  targetMessageId: string,
+  targetPage?: number
+): Promise<void> => {
+  if (!conversationId || !targetMessageId) {
+    return;
+  }
+
+  return hydrateConversationMessages(conversationId, {
+    mode: 'targeted',
+    targetMessageId,
+    targetPage,
+  });
 };
 
 export const beforeUpdateMessageList = (fn: (list: TMessage[]) => TMessage[]) => {
   beforeUpdateMessageListStack.push(fn);
   return () => {
-    beforeUpdateMessageListStack.splice(beforeUpdateMessageListStack.indexOf(fn), 1);
+    const index = beforeUpdateMessageListStack.indexOf(fn);
+    if (index >= 0) {
+      beforeUpdateMessageListStack.splice(index, 1);
+    }
   };
 };
-export { ChatKeyProvider, MessageListProvider, useChatKey, useMessageList, useUpdateMessageList };
+
+export const MessageListProvider: FC<PropsWithChildren<Record<string, unknown>>> = ({ children }) => {
+  return createElement(Fragment, null, children);
+};
+
+export const ChatKeyProvider: FC<PropsWithChildren<Record<string, unknown>>> = ({ children }) => {
+  return createElement(Fragment, null, children);
+};
+
+export const useChatKey = () => {
+  return useConversationContext().conversationId;
+};

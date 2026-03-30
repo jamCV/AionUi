@@ -1,8 +1,15 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockUseMessageList = vi.fn();
+const mockUseConversationMessagePagination = vi.fn();
+const mockScrollToIndex = vi.fn();
+const mockHideScrollButton = vi.fn();
+const mockLocation = {
+  key: 'loc-1',
+  state: {},
+};
 
 vi.mock('@/renderer/hooks/context/ConversationContext', () => ({
   useConversationContextSafe: () => ({
@@ -12,21 +19,33 @@ vi.mock('@/renderer/hooks/context/ConversationContext', () => ({
 
 vi.mock('@/renderer/pages/conversation/Messages/hooks', () => ({
   useMessageList: () => mockUseMessageList(),
+  useConversationMessagePagination: () => mockUseConversationMessagePagination(),
 }));
 
 vi.mock('@/renderer/pages/conversation/Messages/useAutoScroll', () => ({
   useAutoScroll: () => ({
-    virtuosoRef: { current: null },
+    virtuosoRef: { current: { scrollToIndex: mockScrollToIndex } },
     handleScroll: vi.fn(),
     handleAtBottomStateChange: vi.fn(),
     handleFollowOutput: false,
     showScrollButton: false,
     scrollToBottom: vi.fn(),
-    hideScrollButton: vi.fn(),
+    hideScrollButton: mockHideScrollButton,
   }),
 }));
 
 vi.mock('@arco-design/web-react', () => ({
+  Button: ({
+    children,
+    onClick,
+    loading,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    onClick?: () => void;
+    loading?: boolean;
+    disabled?: boolean;
+  }) => React.createElement('button', { onClick, disabled: disabled || loading }, children),
   Image: {
     PreviewGroup: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
   },
@@ -43,24 +62,28 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  useLocation: () => ({
-    key: 'loc-1',
-    state: {},
-  }),
+  useLocation: () => mockLocation,
 }));
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data,
     itemContent,
+    components,
   }: {
     data: unknown[];
     itemContent: (index: number, item: unknown) => React.ReactNode;
+    components?: {
+      Header?: React.ComponentType;
+      Footer?: React.ComponentType;
+    };
   }) =>
     React.createElement(
       'div',
       {},
-      data.map((item, index) => React.createElement('div', { key: index }, itemContent(index, item)))
+      components?.Header ? React.createElement(components.Header) : null,
+      data.map((item, index) => React.createElement('div', { key: index }, itemContent(index, item))),
+      components?.Footer ? React.createElement(components.Footer) : null
     ),
 }));
 
@@ -145,6 +168,14 @@ import MessageList from '@/renderer/pages/conversation/Messages/MessageList';
 describe('MessageList file summary grouping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLocation.key = 'loc-1';
+    mockLocation.state = {};
+    mockUseConversationMessagePagination.mockReturnValue({
+      hasOlder: false,
+      isInitialLoading: false,
+      isLoadingOlder: false,
+      loadOlder: vi.fn(),
+    });
     mockUseMessageList.mockReturnValue([
       {
         id: 'acp-message-1',
@@ -176,5 +207,69 @@ describe('MessageList file summary grouping', () => {
     render(<MessageList />);
 
     expect(screen.getByText('file-summary:src/example.ts')).toBeTruthy();
+  });
+
+  it('shows a load older button when older pages exist', () => {
+    mockUseConversationMessagePagination.mockReturnValue({
+      hasOlder: true,
+      isInitialLoading: false,
+      isLoadingOlder: false,
+      loadOlder: vi.fn(),
+    });
+
+    render(<MessageList />);
+
+    expect(screen.getByRole('button', { name: 'messages.loadOlderMessages' })).toBeTruthy();
+  });
+
+  it('calls loadOlder when clicking the load older button', () => {
+    const loadOlder = vi.fn();
+    mockUseConversationMessagePagination.mockReturnValue({
+      hasOlder: true,
+      isInitialLoading: false,
+      isLoadingOlder: false,
+      loadOlder,
+    });
+
+    render(<MessageList />);
+
+    screen.getByRole('button', { name: 'messages.loadOlderMessages' }).click();
+
+    expect(loadOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the load older button during initial loading', () => {
+    mockUseConversationMessagePagination.mockReturnValue({
+      hasOlder: true,
+      isInitialLoading: true,
+      isLoadingOlder: false,
+      loadOlder: vi.fn(),
+    });
+
+    render(<MessageList />);
+
+    expect(screen.queryByRole('button', { name: 'messages.loadOlderMessages' })).toBeNull();
+  });
+
+  it('scrolls to and highlights the targeted message from search state', async () => {
+    mockLocation.key = 'loc-search';
+    mockLocation.state = {
+      fromConversationSearch: true,
+      targetMessageId: 'acp-message-1',
+    };
+
+    render(<MessageList />);
+
+    await waitFor(() => {
+      expect(mockHideScrollButton).toHaveBeenCalledTimes(1);
+      expect(mockScrollToIndex).toHaveBeenCalledWith({
+        index: 10000,
+        behavior: 'smooth',
+        align: 'center',
+      });
+    });
+
+    const highlighted = document.getElementById('message-acp-message-1');
+    expect(highlighted?.style.backgroundColor).toBe('var(--color-aou-1)');
   });
 });

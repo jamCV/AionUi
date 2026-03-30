@@ -36,6 +36,9 @@ describe('getNpxCacheDir', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.LOCALAPPDATA;
+    delete process.env.npm_config_cache;
+    delete process.env.NPM_CONFIG_CACHE;
   });
 
   afterEach(() => {

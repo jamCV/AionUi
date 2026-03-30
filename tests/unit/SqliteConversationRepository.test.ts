@@ -17,6 +17,7 @@ const mockDb = {
   updateConversation: vi.fn(),
   deleteConversation: vi.fn(),
   getConversationMessages: vi.fn(),
+  getConversationMessageLocation: vi.fn(),
   insertMessage: vi.fn(),
   getUserConversations: vi.fn(),
   searchConversationMessages: vi.fn(),
@@ -134,6 +135,24 @@ describe('SqliteConversationRepository', () => {
     expect(result.data).toHaveLength(1);
     expect(result.hasMore).toBe(false);
     expect(mockDb.getConversationMessages).toHaveBeenCalledWith('c1', 0, 100, undefined);
+  });
+
+  it('getMessageLocation delegates to db.getConversationMessageLocation', async () => {
+    const location = {
+      conversationId: 'c1',
+      messageId: 'm42',
+      page: 3,
+      pageSize: 50,
+      total: 160,
+      indexWithinPage: 9,
+      absoluteIndex: 159,
+      found: true,
+    };
+    mockDb.getConversationMessageLocation.mockReturnValue(location);
+    const repo = new SqliteConversationRepository();
+
+    await expect(repo.getMessageLocation('c1', 'm42', 50)).resolves.toEqual(location);
+    expect(mockDb.getConversationMessageLocation).toHaveBeenCalledWith('c1', 'm42', 50);
   });
 
   it('insertMessage calls db.insertMessage', async () => {

@@ -24,6 +24,8 @@ vi.mock('../../src/common', () => ({
   ipcBridge: {
     database: {
       getConversationMessages: makeChannel('getConversationMessages'),
+      getConversationMessagesPage: makeChannel('getConversationMessagesPage'),
+      getConversationMessageLocation: makeChannel('getConversationMessageLocation'),
       getUserConversations: makeChannel('getUserConversations'),
       searchConversationMessages: makeChannel('searchConversationMessages'),
     },
@@ -49,9 +51,19 @@ function makeRepo(overrides?: Partial<IConversationRepository>): IConversationRe
     createConversation: vi.fn(),
     updateConversation: vi.fn(),
     deleteConversation: vi.fn(),
-    getMessages: vi.fn(() => ({ data: [], total: 0, hasMore: false })),
+    getMessages: vi.fn(() => ({ data: [], total: 0, page: 0, pageSize: 10000, hasMore: false })),
+    getMessageLocation: vi.fn(() => ({
+      conversationId: 'c1',
+      messageId: 'm1',
+      page: 0,
+      pageSize: 100,
+      total: 0,
+      indexWithinPage: 0,
+      absoluteIndex: 0,
+      found: true,
+    })),
     insertMessage: vi.fn(),
-    getUserConversations: vi.fn(() => ({ data: [], total: 0, hasMore: false })),
+    getUserConversations: vi.fn(() => ({ data: [], total: 0, page: 0, pageSize: 10000, hasMore: false })),
     listAllConversations: vi.fn(() => []),
     searchMessages: vi.fn(() => ({ items: [], total: 0, page: 0, pageSize: 20, hasMore: false })),
     ...overrides,
@@ -72,7 +84,13 @@ describe('databaseBridge', () => {
   describe('getConversationMessages', () => {
     it('returns messages from repo', async () => {
       const msgs: Partial<TMessage>[] = [{ id: 'm1', type: 'text' as any }];
-      vi.mocked(repo.getMessages).mockReturnValue({ data: msgs as TMessage[], total: 1, hasMore: false });
+      vi.mocked(repo.getMessages).mockReturnValue({
+        data: msgs as TMessage[],
+        total: 1,
+        page: 0,
+        pageSize: 10000,
+        hasMore: false,
+      });
 
       const result = await handlers['getConversationMessages']({ conversation_id: 'c1' });
 
@@ -91,11 +109,85 @@ describe('databaseBridge', () => {
     });
 
     it('uses provided page and pageSize', async () => {
-      vi.mocked(repo.getMessages).mockReturnValue({ data: [], total: 0, hasMore: false });
+      vi.mocked(repo.getMessages).mockReturnValue({ data: [], total: 0, page: 2, pageSize: 50, hasMore: false });
 
       await handlers['getConversationMessages']({ conversation_id: 'c1', page: 2, pageSize: 50 });
 
       expect(repo.getMessages).toHaveBeenCalledWith('c1', 2, 50);
+    });
+  });
+
+  describe('getConversationMessagesPage', () => {
+    it('returns paginated metadata from repo', async () => {
+      const msgs: Partial<TMessage>[] = [{ id: 'm1', type: 'text' as any }];
+      vi.mocked(repo.getMessages).mockReturnValue({
+        data: msgs as TMessage[],
+        total: 42,
+        page: 3,
+        pageSize: 50,
+        hasMore: true,
+      });
+
+      const result = await handlers['getConversationMessagesPage']({ conversation_id: 'c1', page: 3, pageSize: 50 });
+
+      expect(repo.getMessages).toHaveBeenCalledWith('c1', 3, 50);
+      expect(result).toEqual({ items: msgs, total: 42, page: 3, pageSize: 50, hasMore: true });
+    });
+
+    it('returns an empty paginated result when repo throws', async () => {
+      vi.mocked(repo.getMessages).mockImplementation(() => {
+        throw new Error('db error');
+      });
+
+      const result = await handlers['getConversationMessagesPage']({ conversation_id: 'c1', page: 1, pageSize: 25 });
+
+      expect(result).toEqual({ items: [], total: 0, page: 1, pageSize: 25, hasMore: false });
+    });
+  });
+
+  describe('getConversationMessageLocation', () => {
+    it('returns message location from repo', async () => {
+      const location = {
+        conversationId: 'c1',
+        messageId: 'm42',
+        page: 3,
+        pageSize: 50,
+        total: 160,
+        indexWithinPage: 9,
+        absoluteIndex: 159,
+        found: true,
+      };
+      vi.mocked(repo.getMessageLocation).mockResolvedValue(location);
+
+      const result = await handlers['getConversationMessageLocation']({
+        conversation_id: 'c1',
+        message_id: 'm42',
+        pageSize: 50,
+      });
+
+      expect(repo.getMessageLocation).toHaveBeenCalledWith('c1', 'm42', 50);
+      expect(result).toEqual(location);
+    });
+
+    it('returns not-found fallback when repo throws', async () => {
+      vi.mocked(repo.getMessageLocation).mockRejectedValue(new Error('db error'));
+
+      const result = await handlers['getConversationMessageLocation']({
+        conversation_id: 'c1',
+        message_id: 'missing',
+        pageSize: 25,
+      });
+
+      expect(result).toEqual({
+        conversationId: 'c1',
+        messageId: 'missing',
+        page: 0,
+        pageSize: 25,
+        total: 0,
+        indexWithinPage: -1,
+        absoluteIndex: -1,
+        found: false,
+      });
     });
   });
 
@@ -107,6 +199,8 @@ describe('databaseBridge', () => {
       vi.mocked(repo.getUserConversations).mockReturnValue({
         data: [dbConv as TChatConversation],
         total: 1,
+        page: 0,
+        pageSize: 10000,
         hasMore: false,
       });
 
@@ -119,7 +213,13 @@ describe('databaseBridge', () => {
       const { ProcessChat } = await import('../../src/process/utils/initStorage');
       const fileConv: Partial<TChatConversation> = { id: 'file-c1', modifyTime: 1000 };
       vi.mocked(ProcessChat.get).mockResolvedValue([fileConv] as any);
-      vi.mocked(repo.getUserConversations).mockReturnValue({ data: [], total: 0, hasMore: false });
+      vi.mocked(repo.getUserConversations).mockReturnValue({
+        data: [],
+        total: 0,
+        page: 0,
+        pageSize: 10000,
+        hasMore: false,
+      });
 
       const result = await handlers['getUserConversations']({});
 
@@ -133,6 +233,8 @@ describe('databaseBridge', () => {
       vi.mocked(repo.getUserConversations).mockReturnValue({
         data: [conv as TChatConversation],
         total: 1,
+        page: 0,
+        pageSize: 10000,
         hasMore: false,
       });
 

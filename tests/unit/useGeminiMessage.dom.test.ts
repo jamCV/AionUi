@@ -37,7 +37,7 @@ vi.mock('@/common/chat/chatLib', () => ({
   transformMessage: vi.fn((msg: unknown) => msg),
 }));
 
-vi.mock('@/renderer/messages/hooks', () => ({
+vi.mock('@/renderer/pages/conversation/Messages/hooks', () => ({
   useAddOrUpdateMessage: vi.fn(() => vi.fn()),
 }));
 

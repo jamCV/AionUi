@@ -609,6 +609,7 @@ export type I18nKey =
   | 'messages.fileChangesCount'
   | 'messages.imageGenerationModelDetected'
   | 'messages.imageLoadFailed'
+  | 'messages.loadOlderMessages'
   | 'messages.noOptionsAvailable'
   | 'messages.openLinkFailed'
   | 'messages.option'

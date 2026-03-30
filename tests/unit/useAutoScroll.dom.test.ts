@@ -130,6 +130,26 @@ describe('useAutoScroll - scroll to bottom on message send (#977)', () => {
     expect(mockVirtuosoHandle.scrollToIndex).toHaveBeenCalled();
   });
 
+  it('should NOT scroll when older history is prepended', async () => {
+    const initialMessages: TMessage[] = [createMessage('left', '2'), createMessage('left', '3')];
+
+    const { result, rerender } = renderHook(({ messages, itemCount }) => useAutoScroll({ messages, itemCount }), {
+      initialProps: { messages: initialMessages, itemCount: 2 },
+    });
+
+    (result.current.virtuosoRef as any).current = mockVirtuosoHandle;
+
+    const newMessages: TMessage[] = [createMessage('left', '1'), ...initialMessages];
+
+    rerender({ messages: newMessages, itemCount: 3 });
+
+    await act(async () => {
+      vi.runAllTimers();
+    });
+
+    expect(mockVirtuosoHandle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
   it('should show scroll button when not at bottom', () => {
     const { result } = renderHook(({ messages, itemCount }) => useAutoScroll({ messages, itemCount }), {
       initialProps: { messages: [], itemCount: 0 },

@@ -8,7 +8,7 @@ import type { CodexToolCallUpdate, IMessageAcpToolCall, IMessageToolGroup, TMess
 import { useConversationContextSafe } from '@/renderer/hooks/context/ConversationContext';
 import { iconColors } from '@/renderer/styles/colors';
 import { CHAT_MESSAGE_JUMP_EVENT, type ChatMessageJumpDetail } from '@/renderer/utils/chat/chatMinimapEvents';
-import { Image } from '@arco-design/web-react';
+import { Button, Image } from '@arco-design/web-react';
 import { Down } from '@icon-park/react';
 import MessageAcpPermission from '@renderer/pages/conversation/Messages/acp/MessageAcpPermission';
 import MessageAcpToolCall from '@renderer/pages/conversation/Messages/acp/MessageAcpToolCall';
@@ -23,7 +23,7 @@ import HOC from '@renderer/utils/ui/HOC';
 import MessageCodexToolCall from './codex/MessageCodexToolCall';
 import type { FileChangeInfo } from './codex/MessageFileChanges';
 import MessageFileChanges, { parseDiff } from './codex/MessageFileChanges';
-import { useMessageList } from './hooks';
+import { useConversationMessagePagination, useMessageList } from './hooks';
 import MessageAgentStatus from './components/MessageAgentStatus';
 import MessagePlan from './components/MessagePlan';
 import MessageTips from './components/MessageTips';
@@ -33,6 +33,8 @@ import MessageToolGroupSummary from './components/MessageToolGroupSummary';
 import MessageText from './components/MessagetText';
 import type { WriteFileResult } from './types';
 import { useAutoScroll } from './useAutoScroll';
+
+const LOAD_MORE_HEADER_HEIGHT = 56;
 
 type TurnDiffContent = Extract<CodexToolCallUpdate, { subtype: 'turn_diff' }>;
 
@@ -142,14 +144,43 @@ const MessageItem: React.FC<{ message: TMessage; highlighted?: boolean }> = Reac
     prev.highlighted === next.highlighted
 );
 
+const renderLoadOlderHeader = (
+  showLoadOlder: boolean,
+  isLoadingOlder: boolean,
+  isInitialLoading: boolean,
+  onLoadOlder: () => void,
+  t: (key: string) => string
+) => {
+  if (isInitialLoading) {
+    return <div className='h-10px' />;
+  }
+
+  if (!showLoadOlder) {
+    return <div className='h-10px' />;
+  }
+
+  return (
+    <div className='h-56px flex items-center justify-center'>
+      <Button size='small' loading={isLoadingOlder} onClick={onLoadOlder}>
+        {t('messages.loadOlderMessages')}
+      </Button>
+    </div>
+  );
+};
+
 const MessageList: React.FC<{ className?: string }> = () => {
   const list = useMessageList();
+  const { hasOlder, isInitialLoading, isLoadingOlder, loadOlder } = useConversationMessagePagination();
   const conversationContext = useConversationContextSafe();
   const { t } = useTranslation();
   const location = useLocation();
   const locationState = (location.state || {}) as ConversationLocationState;
   const targetMessageId = locationState.targetMessageId;
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | undefined>();
+  const [firstItemIndex, setFirstItemIndex] = useState(10000);
+  const previousProcessedLengthRef = useRef(0);
+  const previousFirstAnchorIdRef = useRef<string | undefined>(undefined);
+  const previousLastAnchorIdRef = useRef<string | undefined>(undefined);
   const handledTargetKeyRef = useRef<string>('');
 
   // Pre-process message list to group Codex turn_diff messages
@@ -195,7 +226,6 @@ const MessageList: React.FC<{ className?: string }> = () => {
 
     for (let i = 0, len = list.length; i < len; i++) {
       const message = list[i];
-      // Skip available_commands messages
       if (message.type === 'available_commands') continue;
       if (message.type === 'codex_tool_call' && message.content.subtype === 'turn_diff') {
         pushFileDffChanges(parseDiff((message.content as TurnDiffContent).data.unified_diff), message.id);
@@ -240,6 +270,41 @@ const MessageList: React.FC<{ className?: string }> = () => {
     return result;
   }, [list]);
 
+  useEffect(() => {
+    setFirstItemIndex(10000);
+    previousProcessedLengthRef.current = 0;
+    previousFirstAnchorIdRef.current = undefined;
+    previousLastAnchorIdRef.current = undefined;
+  }, [conversationContext?.conversationId]);
+
+  useEffect(() => {
+    const previousLength = previousProcessedLengthRef.current;
+    const currentLength = processedList.length;
+    const currentFirstAnchorId = processedList[0] ? getProcessedItemAnchorId(processedList[0]) : undefined;
+    const currentLastAnchorId = processedList[currentLength - 1]
+      ? getProcessedItemAnchorId(processedList[currentLength - 1])
+      : undefined;
+    const previousFirstAnchorId = previousFirstAnchorIdRef.current;
+    const previousLastAnchorId = previousLastAnchorIdRef.current;
+    const isPrependedHistory =
+      currentLength > previousLength &&
+      previousLength > 0 &&
+      currentFirstAnchorId !== previousFirstAnchorId &&
+      currentLastAnchorId === previousLastAnchorId;
+
+    if (isPrependedHistory) {
+      setFirstItemIndex((current) => current - (currentLength - previousLength));
+    }
+
+    previousProcessedLengthRef.current = currentLength;
+    previousFirstAnchorIdRef.current = currentFirstAnchorId;
+    previousLastAnchorIdRef.current = currentLastAnchorId;
+  }, [processedList]);
+
+  const handleLoadOlder = () => {
+    void loadOlder();
+  };
+
   // Use auto-scroll hook
   const {
     virtuosoRef,
@@ -275,7 +340,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
 
     requestAnimationFrame(() => {
       virtuosoRef.current?.scrollToIndex({
-        index: targetIndex,
+        index: firstItemIndex + targetIndex,
         behavior: 'smooth',
         align: 'center',
       });
@@ -286,7 +351,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
     }, 2400);
 
     return () => window.clearTimeout(timer);
-  }, [hideScrollButton, location.key, processedList, targetMessageId, virtuosoRef]);
+  }, [firstItemIndex, hideScrollButton, location.key, processedList, targetMessageId, virtuosoRef]);
 
   useEffect(() => {
     const handleMessageJump = (event: Event) => {
@@ -311,7 +376,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
       hideScrollButton();
       requestAnimationFrame(() => {
         virtuosoRef.current?.scrollToIndex({
-          index: targetIndex,
+          index: firstItemIndex + targetIndex,
           align: detail.align || 'start',
           behavior: detail.behavior || 'smooth',
         });
@@ -322,7 +387,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
     return () => {
       window.removeEventListener(CHAT_MESSAGE_JUMP_EVENT, handleMessageJump);
     };
-  }, [conversationContext?.conversationId, hideScrollButton, processedList, virtuosoRef]);
+  }, [conversationContext?.conversationId, firstItemIndex, hideScrollButton, processedList, virtuosoRef]);
 
   // Click scroll button
   const handleScrollButtonClick = () => {
@@ -357,15 +422,19 @@ const MessageList: React.FC<{ className?: string }> = () => {
             ref={virtuosoRef}
             className='flex-1 h-full pb-10px box-border'
             data={processedList}
-            initialTopMostItemIndex={processedList.length - 1}
+            firstItemIndex={firstItemIndex}
+            initialTopMostItemIndex={Math.max(firstItemIndex + processedList.length - 1, 0)}
+            computeItemKey={(index, item) =>
+              `${firstItemIndex + index}-${getProcessedItemAnchorId(item as IMessageVO)}`
+            }
             atBottomThreshold={100}
-            increaseViewportBy={200}
+            increaseViewportBy={{ top: LOAD_MORE_HEADER_HEIGHT, bottom: 200 }}
             itemContent={renderItem}
             followOutput={handleFollowOutput}
             onScroll={handleScroll}
             atBottomStateChange={handleAtBottomStateChange}
             components={{
-              Header: () => <div className='h-10px' />,
+              Header: () => renderLoadOlderHeader(hasOlder, isLoadingOlder, isInitialLoading, handleLoadOlder, t),
               Footer: () => <div className='h-20px' />,
             }}
           />

@@ -8,7 +8,7 @@ import { getDatabase } from '@process/services/database';
 import type { IConversationRepository, PaginatedResult } from './IConversationRepository';
 import type { TChatConversation } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
-import type { IMessageSearchResponse } from '@/common/types/database';
+import type { IConversationMessageLocation, IMessageSearchResponse } from '@/common/types/database';
 import type {
   CreateTurnSnapshotFileInput,
   CreateTurnSnapshotInput,
@@ -61,8 +61,19 @@ export class SqliteConversationRepository implements IConversationRepository {
     return {
       data: result.data ?? [],
       total: result.total ?? 0,
+      page: result.page ?? page,
+      pageSize: result.pageSize ?? pageSize,
       hasMore: result.hasMore ?? false,
     };
+  }
+
+  async getMessageLocation(
+    conversationId: string,
+    messageId: string,
+    pageSize: number
+  ): Promise<IConversationMessageLocation> {
+    const db = await this.getDb();
+    return db.getConversationMessageLocation(conversationId, messageId, pageSize);
   }
 
   async insertMessage(message: TMessage): Promise<void> {
@@ -87,6 +98,8 @@ export class SqliteConversationRepository implements IConversationRepository {
     return {
       data: result.data ?? [],
       total: result.total ?? 0,
+      page,
+      pageSize,
       hasMore: result.hasMore ?? false,
     };
   }

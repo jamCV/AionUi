@@ -15,6 +15,7 @@
   "downloadFailed": "ダウンロードに失敗しました",
   "imageLoadFailed": "画像の読み込みに失敗しました",
   "scrollToBottom": "下にスクロール",
+  "loadOlderMessages": "以前のメッセージを読み込む",
   "availableCommands": "{{count}} 個の利用可能なコマンド",
   "slash.title": "コマンド",
   "slash.hint": "/ を入力してコマンドメニューを開く",

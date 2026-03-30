@@ -10,7 +10,7 @@
 
 import type { TChatConversation } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
-import type { IMessageSearchResponse } from '@/common/types/database';
+import type { IConversationMessageLocation, IMessageSearchResponse } from '@/common/types/database';
 import type {
   CreateTurnSnapshotInput,
   CreateTurnSnapshotFileInput,
@@ -24,6 +24,8 @@ import type {
 export type PaginatedResult<T> = {
   data: T[];
   total: number;
+  page: number;
+  pageSize: number;
   hasMore: boolean;
 };
 
@@ -33,6 +35,11 @@ export interface IConversationRepository {
   updateConversation(id: string, updates: Partial<TChatConversation>): Promise<void>;
   deleteConversation(id: string): Promise<void>;
   getMessages(id: string, page: number, pageSize: number, order?: 'ASC' | 'DESC'): Promise<PaginatedResult<TMessage>>;
+  getMessageLocation(
+    conversationId: string,
+    messageId: string,
+    pageSize: number
+  ): Promise<IConversationMessageLocation>;
   insertMessage(message: TMessage): Promise<void>;
   /**
    * If cursor is provided, offset is ignored.

@@ -15,6 +15,7 @@
   "downloadFailed": "Failed to download",
   "imageLoadFailed": "Failed to load image",
   "scrollToBottom": "Scroll to bottom",
+  "loadOlderMessages": "Load older messages",
   "availableCommands": "{{count}} Available Commands",
   "slash.title": "Commands",
   "slash.hint": "Type / to open command menu",

@@ -39,7 +39,7 @@ import {
   turnSnapshotFileToRow,
   turnSnapshotToRow,
 } from './types';
-import type { IMessageSearchItem, IMessageSearchResponse } from '@/common/types/database';
+import type { IConversationMessageLocation, IMessageSearchItem, IMessageSearchResponse } from '@/common/types/database';
 import type {
   IChannelPluginConfig,
   IChannelUser,
@@ -825,6 +825,79 @@ export class AionUIDatabase {
         page,
         pageSize,
         hasMore: false,
+      };
+    }
+  }
+
+  getConversationMessageLocation(
+    conversationId: string,
+    messageId: string,
+    pageSize = 100
+  ): IConversationMessageLocation {
+    const normalizedPageSize = Math.max(1, pageSize);
+
+    try {
+      const totalResult = this.db
+        .prepare('SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?')
+        .get(conversationId) as {
+        count: number;
+      };
+
+      const messageRow = this.db
+        .prepare(
+          `
+            SELECT COUNT(*) as absolute_index
+            FROM messages
+            WHERE conversation_id = ?
+              AND (
+                created_at < (SELECT created_at FROM messages WHERE id = ? AND conversation_id = ?)
+                OR (
+                  created_at = (SELECT created_at FROM messages WHERE id = ? AND conversation_id = ?)
+                  AND id <= ?
+                )
+              )
+          `
+        )
+        .get(conversationId, messageId, conversationId, messageId, conversationId, messageId) as
+        | { absolute_index: number }
+        | undefined;
+
+      const absoluteIndex = (messageRow?.absolute_index ?? 0) - 1;
+      if (absoluteIndex < 0) {
+        return {
+          conversationId,
+          messageId,
+          page: 0,
+          pageSize: normalizedPageSize,
+          total: totalResult.count,
+          indexWithinPage: -1,
+          absoluteIndex: -1,
+          found: false,
+        };
+      }
+
+      const page = Math.floor(absoluteIndex / normalizedPageSize);
+      return {
+        conversationId,
+        messageId,
+        page,
+        pageSize: normalizedPageSize,
+        total: totalResult.count,
+        indexWithinPage: absoluteIndex % normalizedPageSize,
+        absoluteIndex,
+        found: true,
+      };
+    } catch (error: any) {
+      console.error('[Database] Get message location error:', error);
+      return {
+        conversationId,
+        messageId,
+        page: 0,
+        pageSize: normalizedPageSize,
+        total: 0,
+        indexWithinPage: -1,
+        absoluteIndex: -1,
+        found: false,
       };
     }
   }

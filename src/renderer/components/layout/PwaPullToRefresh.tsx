@@ -8,9 +8,11 @@ import type React from 'react';
 import { useEffect } from 'react';
 import usePwaMode from '@/renderer/hooks/system/usePwaMode';
 
+const PWA_REFRESH_EVENT = 'aionui:pwa-refresh';
+
 /**
  * Lightweight pull-to-refresh for iOS PWA standalone mode.
- * - Triggers reload when user pulls down from top beyond a threshold.
+ * - Triggers an in-app refresh event when user pulls down from top beyond a threshold.
  * - No persistent UI; avoids an always-visible button.
  */
 const PwaPullToRefresh: React.FC = () => {
@@ -47,9 +49,13 @@ const PwaPullToRefresh: React.FC = () => {
       const nearest = getNearestScrollable(startTarget);
       const values: number[] = [
         typeof window.scrollY === 'number' ? window.scrollY : 0,
-        root && typeof (root as any).scrollTop === 'number' ? (root as any).scrollTop : 0,
-        layout && typeof (layout as any).scrollTop === 'number' ? (layout as any).scrollTop : 0,
-        nearest && typeof (nearest as any).scrollTop === 'number' ? (nearest as any).scrollTop : 0,
+        root && typeof (root as { scrollTop?: number }).scrollTop === 'number' ? (root as { scrollTop: number }).scrollTop : 0,
+        layout && typeof (layout as { scrollTop?: number }).scrollTop === 'number'
+          ? (layout as { scrollTop: number }).scrollTop
+          : 0,
+        nearest && typeof (nearest as { scrollTop?: number }).scrollTop === 'number'
+          ? (nearest as { scrollTop: number }).scrollTop
+          : 0,
       ];
       const topMost = Math.max.apply(null, values);
       return topMost <= 0;
@@ -84,7 +90,7 @@ const PwaPullToRefresh: React.FC = () => {
       if (!tracking) return;
       tracking = false;
       if (deltaY >= threshold) {
-        window.location.reload();
+        window.dispatchEvent(new CustomEvent(PWA_REFRESH_EVENT));
       }
     };
 
@@ -103,3 +109,4 @@ const PwaPullToRefresh: React.FC = () => {
 };
 
 export default PwaPullToRefresh;
+export { PWA_REFRESH_EVENT };

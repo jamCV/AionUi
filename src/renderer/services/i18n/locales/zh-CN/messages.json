@@ -15,6 +15,7 @@
   "downloadFailed": "下载失败",
   "imageLoadFailed": "图片加载失败",
   "scrollToBottom": "滚动到底部",
+  "loadOlderMessages": "加载更早消息",
   "availableCommands": "{{count}} 个可用命令",
   "slash.title": "命令",
   "slash.hint": "输入 / 打开命令菜单",
