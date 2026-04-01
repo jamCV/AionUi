@@ -210,6 +210,45 @@
       "failed": "Revert failed before all files could be restored."
     }
   },
+  "team": {
+    "title": "Team Run",
+    "taskCount": "{{count}} task(s)",
+    "activeTaskCount": "{{count}} active task(s)",
+    "awaitingUserInput": "Waiting for your confirmation before continuing.",
+    "empty": "No delegated tasks yet.",
+    "assistantLabel": "Assistant: {{assistant}}",
+    "assistantUnavailable": "Assistant not assigned yet",
+    "childConversationName": "Sub-conversation: {{name}}",
+    "openConversation": "Open",
+    "openConversationFailed": "Failed to open sub-conversation",
+    "runStatus": {
+      "running": "Running",
+      "waiting_user": "Waiting for user",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "phase": {
+      "delegating": "Delegating",
+      "subtask_running": "Subtask running",
+      "continuing_main": "Continuing main",
+      "completed": "Completed",
+      "failed": "Failed"
+    },
+    "taskStatus": {
+      "queued": "Queued",
+      "running": "Running",
+      "waiting_user": "Waiting for user",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "sidebarStatus": {
+      "pending": "Pending",
+      "running": "Running",
+      "finished": "Finished"
+    }
+  },
   "skill_generator": {
     "title": "Generate Skill/Rule",
     "generate": "Generate",

@@ -25,6 +25,7 @@ import { Shield } from '@icon-park/react';
 import { iconColors } from '@/renderer/styles/colors';
 import AgentModeSelector from '@/renderer/components/agent/AgentModeSelector';
 import ThoughtDisplay from '@/renderer/components/chat/ThoughtDisplay';
+import TurnSummaryPanel from '@/renderer/pages/conversation/TurnSummaryPanel';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { GeminiModelSelection } from './useGeminiModelSelection';
@@ -297,6 +298,7 @@ const GeminiSendBox: React.FC<{
       )}
 
       <ThoughtDisplay thought={thought} running={running} onStop={handleStop} />
+      <TurnSummaryPanel conversationId={conversation_id} />
 
       <SendBox
         value={content}

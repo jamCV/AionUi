@@ -210,6 +210,45 @@
       "failed": "모든 파일을 복원하기 전에 되돌리기에 실패했습니다."
     }
   },
+  "team": {
+    "title": "팀 실행",
+    "taskCount": "작업 {{count}}개",
+    "activeTaskCount": "진행 중인 작업 {{count}}개",
+    "awaitingUserInput": "계속하려면 확인이 필요합니다.",
+    "empty": "위임된 작업이 아직 없습니다.",
+    "assistantLabel": "어시스턴트: {{assistant}}",
+    "assistantUnavailable": "아직 어시스턴트가 지정되지 않았습니다",
+    "childConversationName": "하위 대화: {{name}}",
+    "openConversation": "열기",
+    "openConversationFailed": "하위 대화를 열지 못했습니다",
+    "runStatus": {
+      "running": "진행 중",
+      "waiting_user": "사용자 대기",
+      "completed": "완료됨",
+      "failed": "실패",
+      "cancelled": "취소됨"
+    },
+    "phase": {
+      "delegating": "위임 중",
+      "subtask_running": "하위 작업 실행 중",
+      "continuing_main": "메인 대화 계속 진행",
+      "completed": "완료됨",
+      "failed": "실패"
+    },
+    "taskStatus": {
+      "queued": "대기 중",
+      "running": "진행 중",
+      "waiting_user": "사용자 대기",
+      "completed": "완료됨",
+      "failed": "실패",
+      "cancelled": "취소됨"
+    },
+    "sidebarStatus": {
+      "pending": "대기",
+      "running": "진행 중",
+      "finished": "종료됨"
+    }
+  },
   "skill_generator": {
     "title": "스킬/규칙 생성",
     "generate": "생성",

@@ -30,6 +30,7 @@ vi.mock('../../../src/renderer/pages/conversation/GroupedHistory/hooks/useConver
 
 vi.mock('../../../src/renderer/pages/conversation/GroupedHistory/utils/groupingHelpers', () => ({
   buildGroupedHistory: vi.fn(),
+  getTeamParentConversationId: vi.fn(() => undefined),
 }));
 
 const mockedUseConversationListSync = vi.mocked(useConversationListSync);

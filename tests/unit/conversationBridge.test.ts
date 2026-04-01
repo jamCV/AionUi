@@ -57,6 +57,10 @@ vi.mock('../../src/common', () => ({
         keep: makeChannel('turnSnapshot.keep'),
         revert: makeChannel('turnSnapshot.revert'),
       },
+      team: {
+        getRunView: makeChannel('conversation.team.getRunView'),
+        listChildConversations: makeChannel('conversation.team.listChildConversations'),
+      },
       confirmation: {
         confirm: makeChannel('confirmation.confirm'),
         list: makeChannel('confirmation.list'),

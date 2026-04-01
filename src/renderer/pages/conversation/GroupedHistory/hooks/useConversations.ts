@@ -4,14 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useConversationHistoryContext } from '@/renderer/hooks/context/ConversationHistoryContext';
+import type { TChatConversation } from '@/common/config/storage';
 import {
   dispatchWorkspaceExpansionChange,
   readExpandedWorkspaces,
   WORKSPACE_EXPANSION_STORAGE_KEY,
 } from './useWorkspaceExpansionState';
+import { getTeamParentConversationId } from '../utils/groupingHelpers';
 
 export const useConversations = () => {
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<string[]>(() => readExpandedWorkspaces());
@@ -59,6 +61,30 @@ export const useConversations = () => {
   }, [expandedWorkspaces]);
 
   const { pinnedConversations, timelineSections } = groupedHistory;
+  const conversationIds = useMemo(() => {
+    return new Set(conversations.map((conversation) => conversation.id));
+  }, [conversations]);
+
+  const teamChildMap = useMemo(() => {
+    const nextChildMap = new Map<string, TChatConversation[]>();
+
+    conversations.forEach((conversation) => {
+      const parentConversationId = getTeamParentConversationId(conversation);
+      if (!parentConversationId || !conversationIds.has(parentConversationId)) {
+        return;
+      }
+
+      const childConversations = nextChildMap.get(parentConversationId) ?? [];
+      childConversations.push(conversation);
+      nextChildMap.set(parentConversationId, childConversations);
+    });
+
+    nextChildMap.forEach((childConversations) => {
+      childConversations.sort((left, right) => right.modifyTime - left.modifyTime);
+    });
+
+    return nextChildMap;
+  }, [conversationIds, conversations]);
 
   // Auto-expand all workspaces on first load only (#1156)
   useEffect(() => {
@@ -113,6 +139,7 @@ export const useConversations = () => {
     hasCompletionUnread,
     expandedWorkspaces,
     pinnedConversations,
+    teamChildMap,
     timelineSections,
     handleToggleWorkspace,
   };

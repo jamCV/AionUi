@@ -168,6 +168,10 @@ vi.mock('../../src/renderer/components/media/FileAttachButton', () => ({
   default: () => <button data-testid='file-attach'>Attach</button>,
 }));
 
+vi.mock('../../src/renderer/pages/conversation/TurnSummaryPanel', () => ({
+  default: () => <div data-testid='turn-summary-panel' />,
+}));
+
 import RemoteSendBox from '../../src/renderer/pages/conversation/platforms/remote/RemoteSendBox';
 
 // ---------------------------------------------------------------------------

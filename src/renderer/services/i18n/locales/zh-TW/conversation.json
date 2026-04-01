@@ -210,6 +210,45 @@
       "failed": "撤銷未能完整還原所有檔案。"
     }
   },
+  "team": {
+    "title": "協作執行",
+    "taskCount": "{{count}} 個任務",
+    "activeTaskCount": "{{count}} 個任務仍在進行",
+    "awaitingUserInput": "等待你的確認後繼續。",
+    "empty": "目前還沒有委派任務。",
+    "assistantLabel": "助手：{{assistant}}",
+    "assistantUnavailable": "尚未指派助手",
+    "childConversationName": "子會話：{{name}}",
+    "openConversation": "打開",
+    "openConversationFailed": "打開子會話失敗",
+    "runStatus": {
+      "running": "進行中",
+      "waiting_user": "等待使用者",
+      "completed": "已完成",
+      "failed": "失敗",
+      "cancelled": "已取消"
+    },
+    "phase": {
+      "delegating": "委派中",
+      "subtask_running": "子任務執行中",
+      "continuing_main": "繼續主會話",
+      "completed": "已完成",
+      "failed": "失敗"
+    },
+    "taskStatus": {
+      "queued": "排隊中",
+      "running": "進行中",
+      "waiting_user": "等待使用者",
+      "completed": "已完成",
+      "failed": "失敗",
+      "cancelled": "已取消"
+    },
+    "sidebarStatus": {
+      "pending": "待開始",
+      "running": "進行中",
+      "finished": "已結束"
+    }
+  },
   "skill_generator": {
     "title": "Generate Skill/Rule",
     "generate": "Generate",

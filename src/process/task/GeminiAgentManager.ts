@@ -30,6 +30,8 @@ import { hasCronCommands } from './CronCommandDetector';
 import { extractTextFromMessage, processCronInMessage } from './MessageMiddleware';
 import { stripThinkTags } from './ThinkTagDetector';
 import * as fs from 'node:fs';
+import { parseCompletionSource, turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
+import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
 
 // gemini agent管理器类
 type UiMcpServerConfig = {
@@ -101,6 +103,7 @@ export class GeminiAgentManager extends BaseAgentManager<
 
   /** Stored webSearchEngine for worker re-bootstrap / 保存 webSearchEngine 用于重建 worker */
   private webSearchEngine?: 'google' | 'default';
+  private lastAssistantMessageId: string | undefined;
 
   constructor(
     data: {
@@ -309,37 +312,51 @@ export class GeminiAgentManager extends BaseAgentManager<
     }
   }
 
-  async sendMessage(data: { input: string; msg_id: string; files?: string[]; cronMeta?: CronMessageMeta }) {
-    const message: TMessage = {
-      id: data.msg_id,
-      type: 'text',
-      position: 'right',
-      conversation_id: this.conversation_id,
-      content: {
-        content: data.input,
-        ...(data.cronMeta && { cronMeta: data.cronMeta }),
-      },
-    };
-    addMessage(this.conversation_id, message);
-    // Update conversation modifyTime so history list sorts correctly.
-    // Without this, chat.history.refresh fires before modifyTime is updated,
-    // causing stale sorting until a manual page refresh.
-    try {
-      (await getDatabase()).updateConversation(this.conversation_id, {});
-    } catch {
-      // Conversation might not exist in DB yet
-    }
-    // Emit user_content IPC for cron messages so the frontend can display them
-    // even if the component mounts after the DB save but before the DB load completes.
-    // Normal user-initiated messages are added locally by the frontend, so only cron needs this.
-    if (data.cronMeta) {
-      const userResponseMessage: IResponseMessage = {
-        type: 'user_content',
+  async sendMessage(data: {
+    input: string;
+    agentContent?: string;
+    msg_id: string;
+    files?: string[];
+    cronMeta?: CronMessageMeta;
+    skipPersistUserMessage?: boolean;
+    skipEmitUserMessage?: boolean;
+  }) {
+    const shouldPersistUserMessage = !data.skipPersistUserMessage;
+    const shouldEmitUserMessage = !data.skipEmitUserMessage;
+    const inputForAgent = data.agentContent ?? data.input;
+
+    if (shouldPersistUserMessage) {
+      const message: TMessage = {
+        id: data.msg_id,
+        type: 'text',
+        position: 'right',
         conversation_id: this.conversation_id,
-        msg_id: data.msg_id,
-        data: { content: message.content.content, cronMeta: data.cronMeta },
+        content: {
+          content: data.input,
+          ...(data.cronMeta && { cronMeta: data.cronMeta }),
+        },
       };
-      ipcBridge.geminiConversation.responseStream.emit(userResponseMessage);
+      addMessage(this.conversation_id, message);
+      // Update conversation modifyTime so history list sorts correctly.
+      // Without this, chat.history.refresh fires before modifyTime is updated,
+      // causing stale sorting until a manual page refresh.
+      try {
+        (await getDatabase()).updateConversation(this.conversation_id, {});
+      } catch {
+        // Conversation might not exist in DB yet
+      }
+      // Emit user_content IPC for cron messages so the frontend can display them
+      // even if the component mounts after the DB save but before the DB load completes.
+      // Normal user-initiated messages are added locally by the frontend, so only cron needs this.
+      if (data.cronMeta && shouldEmitUserMessage) {
+        const userResponseMessage: IResponseMessage = {
+          type: 'user_content',
+          conversation_id: this.conversation_id,
+          msg_id: data.msg_id,
+          data: { content: message.content.content, cronMeta: data.cronMeta },
+        };
+        ipcBridge.geminiConversation.responseStream.emit(userResponseMessage);
+      }
     }
 
     // Check if MCP config has changed since worker was initialized
@@ -364,7 +381,12 @@ export class GeminiAgentManager extends BaseAgentManager<
           });
         });
       })
-      .then(() => super.sendMessage(data))
+      .then(() =>
+        super.sendMessage({
+          ...data,
+          input: inputForAgent,
+        })
+      )
       .finally(() => {
         cronBusyGuard.setProcessing(this.conversation_id, false);
       });
@@ -607,6 +629,18 @@ export class GeminiAgentManager extends BaseAgentManager<
         // When stream finishes, check for cron commands in the accumulated message
         // Use longer delay and retry logic to ensure message is persisted
         this.checkCronWithRetry(0);
+        const completionSource = parseCompletionSource(data.data);
+        void turnSnapshotCoordinator.completeTurn({
+          conversationId: this.conversation_id,
+          completionSignal: 'finish',
+          completionSource,
+        });
+        notifyTeamTurnCompleted({
+          conversationId: this.conversation_id,
+          assistantMessageId: this.lastAssistantMessageId,
+          completionSignal: 'finish',
+          completionSource,
+        });
       }
       if (data.type === 'start') {
         this.status = 'running';
@@ -643,6 +677,9 @@ export class GeminiAgentManager extends BaseAgentManager<
         const tMessage = transformMessage(data as IResponseMessage);
         if (tMessage) {
           addOrUpdateMessage(this.conversation_id, tMessage, 'gemini');
+          if (tMessage.type === 'text' && tMessage.position === 'left') {
+            this.lastAssistantMessageId = tMessage.msg_id || tMessage.id || this.lastAssistantMessageId;
+          }
           if (tMessage.type === 'tool_group') {
             this.handleConformationMessage(tMessage);
           }

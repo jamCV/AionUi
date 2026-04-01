@@ -205,6 +205,45 @@
       "failed": "Tüm dosyalar geri yüklenmeden önce geri alma başarısız oldu."
     }
   },
+  "team": {
+    "title": "Takım Çalıştırması",
+    "taskCount": "{{count}} görev",
+    "activeTaskCount": "{{count}} etkin görev",
+    "awaitingUserInput": "Devam etmek için onayınız bekleniyor.",
+    "empty": "Henüz devredilmiş görev yok.",
+    "assistantLabel": "Asistan: {{assistant}}",
+    "assistantUnavailable": "Henüz asistan atanmadı",
+    "childConversationName": "Alt konuşma: {{name}}",
+    "openConversation": "Aç",
+    "openConversationFailed": "Alt konuşma açılamadı",
+    "runStatus": {
+      "running": "Çalışıyor",
+      "waiting_user": "Kullanıcı bekleniyor",
+      "completed": "Tamamlandı",
+      "failed": "Başarısız",
+      "cancelled": "İptal edildi"
+    },
+    "phase": {
+      "delegating": "Devrediliyor",
+      "subtask_running": "Alt görev çalışıyor",
+      "continuing_main": "Ana konuşma sürdürülüyor",
+      "completed": "Tamamlandı",
+      "failed": "Başarısız"
+    },
+    "taskStatus": {
+      "queued": "Sırada",
+      "running": "Çalışıyor",
+      "waiting_user": "Kullanıcı bekleniyor",
+      "completed": "Tamamlandı",
+      "failed": "Başarısız",
+      "cancelled": "İptal edildi"
+    },
+    "sidebarStatus": {
+      "pending": "Bekliyor",
+      "running": "Çalışıyor",
+      "finished": "Bitti"
+    }
+  },
   "skill_generator": {
     "title": "Yetenek/Kural Oluştur",
     "generate": "Oluştur",

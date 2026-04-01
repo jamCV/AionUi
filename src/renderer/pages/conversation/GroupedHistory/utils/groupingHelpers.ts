@@ -22,6 +22,19 @@ export const isConversationPinned = (conversation: TChatConversation): boolean =
   return Boolean(extra?.pinned);
 };
 
+export const getTeamParentConversationId = (conversation: TChatConversation): string | undefined => {
+  const teamMeta = conversation.extra?.team;
+  if (teamMeta?.role !== 'subagent') {
+    return undefined;
+  }
+
+  return teamMeta.parentConversationId;
+};
+
+export const isSubagentConversation = (conversation: TChatConversation): boolean => {
+  return Boolean(getTeamParentConversationId(conversation));
+};
+
 export const getConversationPinnedAt = (conversation: TChatConversation): number => {
   const extra = conversation.extra as { pinnedAt?: number } | undefined;
   if (typeof extra?.pinnedAt === 'number') {
@@ -129,7 +142,13 @@ export const buildGroupedHistory = (
   conversations: TChatConversation[],
   t: (key: string) => string
 ): GroupedHistoryResult => {
-  const pinnedConversations = conversations
+  const conversationIds = new Set(conversations.map((conversation) => conversation.id));
+  const rootConversations = conversations.filter((conversation) => {
+    const parentConversationId = getTeamParentConversationId(conversation);
+    return !parentConversationId || !conversationIds.has(parentConversationId);
+  });
+
+  const pinnedConversations = rootConversations
     .filter((conversation) => isConversationPinned(conversation))
     .toSorted((a, b) => {
       const orderA = getConversationSortOrder(a);
@@ -140,7 +159,7 @@ export const buildGroupedHistory = (
       return getConversationPinnedAt(b) - getConversationPinnedAt(a);
     });
 
-  const normalConversations = conversations.filter((conversation) => !isConversationPinned(conversation));
+  const normalConversations = rootConversations.filter((conversation) => !isConversationPinned(conversation));
 
   return {
     pinnedConversations,

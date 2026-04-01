@@ -2,13 +2,17 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TurnSnapshot } from '@/common/types/turnSnapshot';
+import type { IConversationTeamChildConversation, IConversationTeamRunView } from '@/common/adapter/ipcBridge';
 
 let liveHandler: ((event: { conversationId: string; summary: TurnSnapshot; reason: string }) => void) | undefined;
+let listChangedHandler: ((event: { conversationId: string; action: string }) => void) | undefined;
 
 const mockListInvoke = vi.fn();
 const mockGetInvoke = vi.fn();
 const mockKeepInvoke = vi.fn();
 const mockRevertInvoke = vi.fn();
+const mockTeamGetRunViewInvoke = vi.fn();
+const mockTeamListChildConversationsInvoke = vi.fn();
 const mockLaunchPreview = vi.fn();
 const mockMessageSuccess = vi.fn();
 const mockMessageError = vi.fn();
@@ -16,6 +20,16 @@ const mockMessageError = vi.fn();
 vi.mock('@/common', () => ({
   ipcBridge: {
     conversation: {
+      listChanged: {
+        on: (handler: typeof listChangedHandler) => {
+          listChangedHandler = handler;
+          return () => {
+            if (listChangedHandler === handler) {
+              listChangedHandler = undefined;
+            }
+          };
+        },
+      },
       turnSnapshot: {
         list: { invoke: (...args: unknown[]) => mockListInvoke(...args) },
         get: { invoke: (...args: unknown[]) => mockGetInvoke(...args) },
@@ -32,8 +46,24 @@ vi.mock('@/common', () => ({
           },
         },
       },
+      team: {
+        getRunView: { invoke: (...args: unknown[]) => mockTeamGetRunViewInvoke(...args) },
+        listChildConversations: { invoke: (...args: unknown[]) => mockTeamListChildConversationsInvoke(...args) },
+      },
     },
   },
+}));
+
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => vi.fn(),
+}));
+
+vi.mock('@/renderer/pages/conversation/hooks/ConversationTabsContext', () => ({
+  useConversationTabs: () => ({
+    activeTab: null,
+    closeAllTabs: vi.fn(),
+    openTab: vi.fn(),
+  }),
 }));
 
 vi.mock('@/renderer/hooks/file/usePreviewLauncher', () => ({
@@ -55,6 +85,7 @@ vi.mock('@arco-design/web-react', () => ({
 
 vi.mock('@icon-park/react', () => ({
   Down: () => React.createElement('span', {}, 'Down'),
+  Right: () => React.createElement('span', {}, 'Right'),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -87,6 +118,32 @@ vi.mock('react-i18next', () => ({
         'conversation.turnSummary.description.conflict':
           'Revert was blocked because the workspace changed after this turn.',
         'conversation.turnSummary.description.failed': 'Revert failed before all files could be restored.',
+        'conversation.team.title': 'Team Run',
+        'conversation.team.taskCount': `${options?.count ?? 0} task(s)`,
+        'conversation.team.activeTaskCount': `${options?.count ?? 0} active task(s)`,
+        'conversation.team.awaitingUserInput': 'Waiting for your confirmation before continuing.',
+        'conversation.team.empty': 'No delegated tasks yet.',
+        'conversation.team.assistantLabel': `Assistant: ${options?.assistant ?? ''}`,
+        'conversation.team.assistantUnavailable': 'Assistant not assigned yet',
+        'conversation.team.childConversationName': `Sub-conversation: ${options?.name ?? ''}`,
+        'conversation.team.openConversation': 'Open',
+        'conversation.team.openConversationFailed': 'Failed to open sub-conversation',
+        'conversation.team.runStatus.running': 'Running',
+        'conversation.team.runStatus.waiting_user': 'Waiting for user',
+        'conversation.team.runStatus.completed': 'Completed',
+        'conversation.team.runStatus.failed': 'Failed',
+        'conversation.team.runStatus.cancelled': 'Cancelled',
+        'conversation.team.phase.delegating': 'Delegating',
+        'conversation.team.phase.subtask_running': 'Subtask running',
+        'conversation.team.phase.continuing_main': 'Continuing main',
+        'conversation.team.phase.completed': 'Completed',
+        'conversation.team.phase.failed': 'Failed',
+        'conversation.team.taskStatus.queued': 'Queued',
+        'conversation.team.taskStatus.running': 'Running',
+        'conversation.team.taskStatus.waiting_user': 'Waiting for user',
+        'conversation.team.taskStatus.completed': 'Completed',
+        'conversation.team.taskStatus.failed': 'Failed',
+        'conversation.team.taskStatus.cancelled': 'Cancelled',
         'messages.turnSnapshot.keep': 'Keep This Turn',
         'messages.turnSnapshot.revert': 'Revert This Turn',
         'messages.turnSnapshot.keepSuccess': 'Turn kept',
@@ -148,12 +205,17 @@ const makeSnapshot = (overrides?: Partial<TurnSnapshot>): TurnSnapshot => ({
 
 describe('TurnSummaryPanel', () => {
   let currentSnapshot: TurnSnapshot;
+  let currentTeamRunView: IConversationTeamRunView | null;
+  let currentChildConversations: IConversationTeamChildConversation[];
 
   beforeEach(() => {
     vi.clearAllMocks();
     liveHandler = undefined;
+    listChangedHandler = undefined;
 
     currentSnapshot = makeSnapshot();
+    currentTeamRunView = null;
+    currentChildConversations = [];
     mockListInvoke.mockImplementation(async () => [{ id: currentSnapshot.id }]);
     mockGetInvoke.mockImplementation(async () => currentSnapshot);
     mockKeepInvoke.mockImplementation(async () => {
@@ -169,6 +231,8 @@ describe('TurnSummaryPanel', () => {
       status: 'reverted',
       reviewStatus: 'reverted',
     });
+    mockTeamGetRunViewInvoke.mockImplementation(async () => currentTeamRunView);
+    mockTeamListChildConversationsInvoke.mockImplementation(async () => currentChildConversations);
   });
 
   it('renders completed pending turns with keep and revert actions', async () => {
@@ -246,5 +310,67 @@ describe('TurnSummaryPanel', () => {
         editable: false,
       })
     );
+  });
+
+  it('renders team runs even when no turn snapshot exists', async () => {
+    currentTeamRunView = {
+      run: {
+        id: 'run-1',
+        mainConversationId: 'conv-1',
+        rootConversationId: 'conv-1',
+        status: 'running',
+        currentPhase: 'subtask_running',
+        awaitingUserInput: false,
+        activeTaskCount: 1,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      tasks: [
+        {
+          id: 'task-1',
+          runId: 'run-1',
+          parentConversationId: 'conv-1',
+          subConversationId: 'sub-1',
+          assistantId: 'builtin-researcher',
+          assistantName: 'Research Assistant',
+          status: 'running',
+          title: 'Investigate bug',
+          taskPrompt: 'Find the root cause',
+          selectionMode: 'recommended',
+          selectionReason: 'matched preset',
+          ownedPaths: ['src/app.ts'],
+          createdAt: 1,
+          updatedAt: 2,
+          touchedFiles: ['src/app.ts'],
+        },
+      ],
+    };
+    currentChildConversations = [
+      {
+        taskId: 'task-1',
+        parentConversationId: 'conv-1',
+        rootConversationId: 'conv-1',
+        subConversationId: 'sub-1',
+        title: 'Investigate bug',
+        assistantId: 'builtin-researcher',
+        assistantName: 'Research Assistant',
+        status: 'running',
+        conversationName: 'Bug investigation',
+        conversationStatus: 'running',
+        updatedAt: 2,
+        summary: 'Checking the stack trace',
+      },
+    ];
+    mockListInvoke.mockResolvedValue([]);
+
+    render(<TurnSummaryPanel conversationId='conv-1' />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Team Run')).toBeTruthy();
+      expect(screen.getByText('Investigate bug')).toBeTruthy();
+      expect(screen.getByText('Assistant: Research Assistant')).toBeTruthy();
+    });
+
+    expect(screen.queryByText('Turn Summary')).toBeNull();
   });
 });

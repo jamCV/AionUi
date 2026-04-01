@@ -75,6 +75,10 @@ const registerMocks = () => {
           keep: createCommand('conversation.turnSnapshot.keep'),
           revert: createCommand('conversation.turnSnapshot.revert'),
         },
+        team: {
+          getRunView: createCommand('conversation.team.getRunView'),
+          listChildConversations: createCommand('conversation.team.listChildConversations'),
+        },
         responseStream: { emit: vi.fn() },
         listChanged: { emit: vi.fn() },
         confirmation: {

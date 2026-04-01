@@ -14,6 +14,7 @@ import { hasCronCommands } from '@process/task/CronCommandDetector';
 import { processCronInMessage } from '@process/task/MessageMiddleware';
 import { cronBusyGuard } from '@process/services/cron/CronBusyGuard';
 import { ipcBridge } from '@/common';
+import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
 
 export class CodexMessageProcessor {
   private currentLoadingId: string | null = null;
@@ -37,6 +38,7 @@ export class CodexMessageProcessor {
   }
 
   processTaskComplete() {
+    const assistantMessageId = this.currentLoadingId || undefined;
     this.currentLoadingId = null;
     this.reasoningMsgId = null;
     this.currentReason = '';
@@ -57,6 +59,12 @@ export class CodexMessageProcessor {
 
     void turnSnapshotCoordinator.completeTurn({
       conversationId: this.conversation_id,
+      completionSignal: 'finish',
+      completionSource: 'task_complete',
+    });
+    notifyTeamTurnCompleted({
+      conversationId: this.conversation_id,
+      assistantMessageId,
       completionSignal: 'finish',
       completionSource: 'task_complete',
     });

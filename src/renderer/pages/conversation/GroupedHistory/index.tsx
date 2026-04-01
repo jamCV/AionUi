@@ -53,6 +53,7 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
     hasCompletionUnread,
     expandedWorkspaces,
     pinnedConversations,
+    teamChildMap,
     timelineSections,
     handleToggleWorkspace,
   } = useConversations();
@@ -160,9 +161,42 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
     ]
   );
 
-  const renderConversation = (conversation: TChatConversation) => {
+  const renderConversation = (
+    conversation: TChatConversation,
+    nested = false,
+    sortable = false
+  ): React.ReactElement => {
     const rowProps = getConversationRowProps(conversation);
-    return <ConversationRow key={conversation.id} {...rowProps} />;
+    const childConversations = teamChildMap.get(conversation.id) ?? [];
+    const assistantName = conversation.extra?.team?.assistantName;
+    const statusKey = conversation.status ?? 'pending';
+    const row =
+      sortable && !nested ? (
+        <SortableConversationRow key={conversation.id} {...rowProps} />
+      ) : (
+        <ConversationRow key={conversation.id} {...rowProps} />
+      );
+
+    return (
+      <div
+        key={conversation.id}
+        className={classNames('min-w-0', nested && !collapsed && 'ml-18px border-l border-solid border-3 pl-10px')}
+      >
+        {nested && !collapsed && (
+          <div className='px-12px pb-4px text-11px text-t-secondary truncate'>
+            {assistantName
+              ? `${assistantName} · ${t(`conversation.team.sidebarStatus.${statusKey}`)}`
+              : t(`conversation.team.sidebarStatus.${statusKey}`)}
+          </div>
+        )}
+        {row}
+        {childConversations.length > 0 && (
+          <div className='min-w-0 flex flex-col gap-2px'>
+            {childConversations.map((childConversation) => renderConversation(childConversation, true))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   // Collect all sortable IDs for the pinned section
@@ -356,12 +390,7 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
               <SortableContext items={pinnedIds} strategy={verticalListSortingStrategy}>
                 <div className='min-w-0'>
                   {pinnedConversations.map((conversation) => {
-                    const props = getConversationRowProps(conversation);
-                    return isDragEnabled ? (
-                      <SortableConversationRow key={conversation.id} {...props} />
-                    ) : (
-                      <ConversationRow key={conversation.id} {...props} />
-                    );
+                    return renderConversation(conversation, false, isDragEnabled);
                   })}
                 </div>
               </SortableContext>

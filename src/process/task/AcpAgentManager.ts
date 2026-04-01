@@ -23,6 +23,7 @@ import { addMessage, addOrUpdateMessage, nextTickToLocalFinish } from '@process/
 import { handlePreviewOpenEvent } from '@process/utils/previewUtils';
 import { cronBusyGuard } from '@process/services/cron/CronBusyGuard';
 import { mainLog, mainWarn, mainError } from '@process/utils/mainLogger';
+import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
 /** Enable ACP performance diagnostics via ACP_PERF=1 */
 const ACP_PERF_LOG = process.env.ACP_PERF === '1';
 
@@ -420,9 +421,10 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         onSignalEvent: async (v) => {
           // Flush buffered text chunks before handling turn-level signals
           this.flushBufferedStreamTextMessages();
-          const turnCompletionSignals = new Set(['finish', 'error', 'stop']);
-          let shouldCompleteTurn = turnCompletionSignals.has(v.type);
+          const completionSignal = v.type === 'finish' || v.type === 'error' || v.type === 'stop' ? v.type : undefined;
+          let shouldCompleteTurn = completionSignal !== undefined;
           const completionSource = parseCompletionSource(v.data);
+          const assistantMessageId = this.currentMsgId || v.msg_id || undefined;
 
           // 仅发送信号到前端，不更新消息列表
           if (v.type === 'acp_permission') {
@@ -503,9 +505,20 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
           if (shouldCompleteTurn) {
             void turnSnapshotCoordinator.completeTurn({
               conversationId: this.conversation_id,
-              completionSignal: v.type,
+              completionSignal,
               completionSource,
             });
+            notifyTeamTurnCompleted({
+              conversationId: this.conversation_id,
+              assistantMessageId,
+              completionSignal,
+              completionSource,
+            });
+          }
+
+          if (completionSignal) {
+            this.currentMsgId = null;
+            this.currentMsgContent = '';
           }
         },
       });
@@ -566,16 +579,23 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
     return this.bootstrap;
   }
 
-  async sendMessage(data: { content: string; files?: string[]; msg_id?: string; cronMeta?: CronMessageMeta }): Promise<{
-    success: boolean;
-    msg?: string;
-    message?: string;
-  }> {
+  async sendMessage(data: {
+    content: string;
+    agentContent?: string;
+    files?: string[];
+    msg_id?: string;
+    cronMeta?: CronMessageMeta;
+    skipPersistUserMessage?: boolean;
+    skipEmitUserMessage?: boolean;
+  }): Promise<{ success: boolean; msg?: string; message?: string }> {
     // Allow stream events through once user actually sends a message,
     // so initAgent progress (agent_status) is visible during the wait.
     this.bootstrapping = false;
 
     const managerSendStart = Date.now();
+    const shouldPersistUserMessage = !data.skipPersistUserMessage;
+    const shouldEmitUserMessage = !data.skipEmitUserMessage;
+    const inputForAgent = data.agentContent ?? data.content;
     // Mark conversation as busy to prevent cron jobs from running
     cronBusyGuard.setProcessing(this.conversation_id, true);
     // Set status to running when message is being processed
@@ -583,7 +603,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
     try {
       // Emit/persist user message immediately so UI can refresh without waiting
       // for ACP connection/auth/session initialization.
-      if (data.msg_id && data.content) {
+      if (data.msg_id && data.content && shouldPersistUserMessage) {
         const userMessage: TMessage = {
           id: data.msg_id,
           msg_id: data.msg_id,
@@ -603,21 +623,23 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         } catch {
           // Conversation might not exist in DB yet
         }
-        const userResponseMessage: IResponseMessage = {
-          type: 'user_content',
-          conversation_id: this.conversation_id,
-          msg_id: data.msg_id,
-          data: data.cronMeta
-            ? { content: userMessage.content.content, cronMeta: data.cronMeta }
-            : userMessage.content.content,
-        };
-        ipcBridge.acpConversation.responseStream.emit(userResponseMessage);
+        if (shouldEmitUserMessage) {
+          const userResponseMessage: IResponseMessage = {
+            type: 'user_content',
+            conversation_id: this.conversation_id,
+            msg_id: data.msg_id,
+            data: data.cronMeta
+              ? { content: userMessage.content.content, cronMeta: data.cronMeta }
+              : userMessage.content.content,
+          };
+          ipcBridge.acpConversation.responseStream.emit(userResponseMessage);
+        }
       }
 
       await this.initAgent(this.options);
 
-      if (data.msg_id && data.content) {
-        let contentToSend = data.content;
+      if (data.msg_id && inputForAgent) {
+        let contentToSend = inputForAgent;
         if (contentToSend.includes(AIONUI_FILES_MARKER)) {
           contentToSend = contentToSend.split(AIONUI_FILES_MARKER)[0].trimEnd();
         }
@@ -646,8 +668,9 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         }
 
         const result = await this.agent.sendMessage({
-          ...data,
           content: contentToSend,
+          files: data.files,
+          msg_id: data.msg_id,
         });
         // 首条消息发送后标记，无论是否有 presetContext
         if (this.isFirstMessage) {
@@ -664,7 +687,11 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         return result;
       }
       const agentSendStart = Date.now();
-      const result = await this.agent.sendMessage(data);
+      const result = await this.agent.sendMessage({
+        content: inputForAgent,
+        files: data.files,
+        msg_id: data.msg_id,
+      });
       if (ACP_PERF_LOG)
         console.log(
           `[ACP-PERF] manager: agent.sendMessage completed ${Date.now() - agentSendStart}ms (total manager.sendMessage: ${Date.now() - managerSendStart}ms)`

@@ -26,6 +26,7 @@ import { useLatestRef } from '@/renderer/hooks/ui/useLatestRef';
 import { useOpenFileSelector } from '@/renderer/hooks/file/useOpenFileSelector';
 import FileAttachButton from '@/renderer/components/media/FileAttachButton';
 import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
+import TurnSummaryPanel from '@/renderer/pages/conversation/TurnSummaryPanel';
 
 interface RemoteDraftData {
   _type: 'remote';
@@ -372,6 +373,7 @@ const RemoteSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id 
   return (
     <div className='max-w-800px w-full mx-auto flex flex-col mt-auto mb-16px'>
       <ThoughtDisplay thought={thought} running={aiProcessing} onStop={handleStop} />
+      <TurnSummaryPanel conversationId={conversation_id} />
 
       <SendBox
         value={content}

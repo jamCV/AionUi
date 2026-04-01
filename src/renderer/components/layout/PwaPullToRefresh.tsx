@@ -49,7 +49,9 @@ const PwaPullToRefresh: React.FC = () => {
       const nearest = getNearestScrollable(startTarget);
       const values: number[] = [
         typeof window.scrollY === 'number' ? window.scrollY : 0,
-        root && typeof (root as { scrollTop?: number }).scrollTop === 'number' ? (root as { scrollTop: number }).scrollTop : 0,
+        root && typeof (root as { scrollTop?: number }).scrollTop === 'number'
+          ? (root as { scrollTop: number }).scrollTop
+          : 0,
         layout && typeof (layout as { scrollTop?: number }).scrollTop === 'number'
           ? (layout as { scrollTop: number }).scrollTop
           : 0,

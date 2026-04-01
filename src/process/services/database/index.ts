@@ -12,18 +12,26 @@ import path from 'path';
 import { isDatabaseMigrationError, runMigrations as executeMigrations } from './migrations';
 import { CURRENT_DB_VERSION, getDatabaseVersion, initSchema, setDatabaseVersion } from './schema';
 import type {
+  CreateTeamRunInput,
+  CreateTeamTaskInput,
   CreateTurnSnapshotFileInput,
   CreateTurnSnapshotInput,
   IConversationRow,
   IMessageRow,
   IPaginatedResult,
   IQueryResult,
+  TeamRun,
+  TeamRunRow,
+  TeamTask,
+  TeamTaskRow,
   TurnReviewStatus,
   TurnSnapshot,
   TurnSnapshotFile,
   TurnSnapshotFileRow,
   TurnSnapshotRow,
   TurnSnapshotSummary,
+  UpdateTeamRunInput,
+  UpdateTeamTaskInput,
   UpdateTurnSnapshotInput,
   IUser,
   TChatConversation,
@@ -34,8 +42,12 @@ import {
   messageToRow,
   rowToConversation,
   rowToMessage,
+  rowToTeamRun,
+  rowToTeamTask,
   rowToTurnSnapshotFile,
   rowToTurnSnapshotSummary,
+  teamRunToRow,
+  teamTaskToRow,
   turnSnapshotFileToRow,
   turnSnapshotToRow,
 } from './types';
@@ -1419,9 +1431,143 @@ export class AionUIDatabase {
     }
   }
 
-  deleteTurnSnapshot(turnId: string): IQueryResult<boolean> {
+  createTeamRun(input: CreateTeamRunInput): IQueryResult<TeamRun> {
     try {
-      const result = this.db.prepare('DELETE FROM conversation_turns WHERE id = ?').run(turnId);
+      const row = teamRunToRow(input);
+      this.db
+        .prepare(
+          `
+            INSERT INTO team_runs (
+              id,
+              main_conversation_id,
+              root_conversation_id,
+              status,
+              current_phase,
+              awaiting_user_input,
+              active_task_count,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `
+        )
+        .run(
+          row.id,
+          row.main_conversation_id,
+          row.root_conversation_id,
+          row.status,
+          row.current_phase,
+          row.awaiting_user_input,
+          row.active_task_count,
+          row.created_at,
+          row.updated_at
+        );
+
+      return {
+        success: true,
+        data: rowToTeamRun(row),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  getTeamRun(id: string): IQueryResult<TeamRun> {
+    try {
+      const row = this.db.prepare('SELECT * FROM team_runs WHERE id = ?').get(id) as TeamRunRow | undefined;
+
+      if (!row) {
+        return {
+          success: false,
+          error: 'Team run not found',
+        };
+      }
+
+      return {
+        success: true,
+        data: rowToTeamRun(row),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  findTeamRunByMainConversationId(mainConversationId: string): IQueryResult<TeamRun | null> {
+    try {
+      const row = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM team_runs
+            WHERE main_conversation_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+          `
+        )
+        .get(mainConversationId) as TeamRunRow | undefined;
+
+      return {
+        success: true,
+        data: row ? rowToTeamRun(row) : null,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: null,
+      };
+    }
+  }
+
+  updateTeamRun(input: UpdateTeamRunInput): IQueryResult<boolean> {
+    try {
+      const fields: string[] = [];
+      const args: Array<number | string> = [];
+
+      if (input.mainConversationId !== undefined) {
+        fields.push('main_conversation_id = ?');
+        args.push(input.mainConversationId);
+      }
+      if (input.rootConversationId !== undefined) {
+        fields.push('root_conversation_id = ?');
+        args.push(input.rootConversationId);
+      }
+      if (input.status !== undefined) {
+        fields.push('status = ?');
+        args.push(input.status);
+      }
+      if (input.currentPhase !== undefined) {
+        fields.push('current_phase = ?');
+        args.push(input.currentPhase);
+      }
+      if (input.awaitingUserInput !== undefined) {
+        fields.push('awaiting_user_input = ?');
+        args.push(input.awaitingUserInput ? 1 : 0);
+      }
+      if (input.activeTaskCount !== undefined) {
+        fields.push('active_task_count = ?');
+        args.push(input.activeTaskCount);
+      }
+
+      fields.push('updated_at = ?');
+      args.push(input.updatedAt ?? Date.now());
+      args.push(input.id);
+
+      const result = this.db
+        .prepare(
+          `
+            UPDATE team_runs
+            SET ${fields.join(', ')}
+            WHERE id = ?
+          `
+        )
+        .run(...args);
+
       return {
         success: true,
         data: result.changes > 0,
@@ -1435,10 +1581,266 @@ export class AionUIDatabase {
     }
   }
 
-  /**
-   * Get message by msg_id and conversation_id
-   * Used for finding existing messages to update (e.g., streaming text accumulation)
-   */
+  createTeamTask(input: CreateTeamTaskInput): IQueryResult<TeamTask> {
+    try {
+      const row = teamTaskToRow(input);
+      this.db
+        .prepare(
+          `
+            INSERT INTO team_tasks (
+              id,
+              run_id,
+              parent_conversation_id,
+              sub_conversation_id,
+              assistant_id,
+              assistant_name,
+              status,
+              title,
+              task_prompt,
+              expected_output,
+              selection_mode,
+              selection_reason,
+              owned_paths_json,
+              last_error,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `
+        )
+        .run(
+          row.id,
+          row.run_id,
+          row.parent_conversation_id,
+          row.sub_conversation_id,
+          row.assistant_id,
+          row.assistant_name,
+          row.status,
+          row.title,
+          row.task_prompt,
+          row.expected_output,
+          row.selection_mode,
+          row.selection_reason,
+          row.owned_paths_json,
+          row.last_error,
+          row.created_at,
+          row.updated_at
+        );
+
+      return {
+        success: true,
+        data: rowToTeamTask(row),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  getTeamTask(id: string): IQueryResult<TeamTask> {
+    try {
+      const row = this.db.prepare('SELECT * FROM team_tasks WHERE id = ?').get(id) as TeamTaskRow | undefined;
+
+      if (!row) {
+        return {
+          success: false,
+          error: 'Team task not found',
+        };
+      }
+
+      return {
+        success: true,
+        data: rowToTeamTask(row),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  updateTeamTask(input: UpdateTeamTaskInput): IQueryResult<boolean> {
+    try {
+      const fields: string[] = [];
+      const args: Array<number | string | null> = [];
+
+      if (input.runId !== undefined) {
+        fields.push('run_id = ?');
+        args.push(input.runId);
+      }
+      if (input.parentConversationId !== undefined) {
+        fields.push('parent_conversation_id = ?');
+        args.push(input.parentConversationId);
+      }
+      if (input.subConversationId !== undefined) {
+        fields.push('sub_conversation_id = ?');
+        args.push(input.subConversationId);
+      }
+      if (input.assistantId !== undefined) {
+        fields.push('assistant_id = ?');
+        args.push(input.assistantId);
+      }
+      if (input.assistantName !== undefined) {
+        fields.push('assistant_name = ?');
+        args.push(input.assistantName);
+      }
+      if (input.status !== undefined) {
+        fields.push('status = ?');
+        args.push(input.status);
+      }
+      if (input.title !== undefined) {
+        fields.push('title = ?');
+        args.push(input.title);
+      }
+      if (input.taskPrompt !== undefined) {
+        fields.push('task_prompt = ?');
+        args.push(input.taskPrompt);
+      }
+      if (input.expectedOutput !== undefined) {
+        fields.push('expected_output = ?');
+        args.push(input.expectedOutput);
+      }
+      if (input.selectionMode !== undefined) {
+        fields.push('selection_mode = ?');
+        args.push(input.selectionMode);
+      }
+      if (input.selectionReason !== undefined) {
+        fields.push('selection_reason = ?');
+        args.push(input.selectionReason);
+      }
+      if (input.ownedPaths !== undefined) {
+        fields.push('owned_paths_json = ?');
+        args.push(JSON.stringify(input.ownedPaths));
+      }
+      if (input.lastError !== undefined) {
+        fields.push('last_error = ?');
+        args.push(input.lastError);
+      }
+
+      fields.push('updated_at = ?');
+      args.push(input.updatedAt ?? Date.now());
+      args.push(input.id);
+
+      const result = this.db
+        .prepare(
+          `
+            UPDATE team_tasks
+            SET ${fields.join(', ')}
+            WHERE id = ?
+          `
+        )
+        .run(...args);
+
+      return {
+        success: true,
+        data: result.changes > 0,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
+      };
+    }
+  }
+
+  listTeamTasksByRun(runId: string): IQueryResult<TeamTask[]> {
+    try {
+      const rows = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM team_tasks
+            WHERE run_id = ?
+            ORDER BY created_at ASC, id ASC
+          `
+        )
+        .all(runId) as TeamTaskRow[];
+
+      return {
+        success: true,
+        data: rows.map(rowToTeamTask),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: [],
+      };
+    }
+  }
+
+  listTeamTasksByParentConversationId(parentConversationId: string): IQueryResult<TeamTask[]> {
+    try {
+      const rows = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM team_tasks
+            WHERE parent_conversation_id = ?
+            ORDER BY created_at ASC, id ASC
+          `
+        )
+        .all(parentConversationId) as TeamTaskRow[];
+
+      return {
+        success: true,
+        data: rows.map(rowToTeamTask),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: [],
+      };
+    }
+  }
+
+  findTeamTaskBySubConversationId(subConversationId: string): IQueryResult<TeamTask | null> {
+    try {
+      const row = this.db
+        .prepare(
+          `
+            SELECT *
+            FROM team_tasks
+            WHERE sub_conversation_id = ?
+            LIMIT 1
+          `
+        )
+        .get(subConversationId) as TeamTaskRow | undefined;
+
+      return {
+        success: true,
+        data: row ? rowToTeamTask(row) : null,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: null,
+      };
+    }
+  }
+
+  deleteTurnSnapshot(turnId: string): IQueryResult<boolean> {
+    try {
+      const result = this.db.prepare('DELETE FROM conversation_turns WHERE id = ?').run(turnId);
+
+      return {
+        success: true,
+        data: result.changes > 0,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: false,
+      };
+    }
+  }
+
   getMessageByMsgId(conversationId: string, msgId: string, type: TMessage['type']): IQueryResult<TMessage | null> {
     try {
       const stmt = this.db.prepare(`

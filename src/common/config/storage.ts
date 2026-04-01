@@ -160,14 +160,27 @@ export interface IEnvStorageRefer {
  */
 export type ConversationSource = 'aionui' | 'telegram' | 'lark' | 'dingtalk' | 'weixin' | (string & {});
 
-interface IChatConversation<T, Extra> {
+export type TeamConversationMeta = {
+  runId: string;
+  role: 'main' | 'subagent';
+  rootConversationId: string;
+  parentConversationId?: string;
+  taskId?: string;
+  assistantId?: string;
+  assistantName?: string;
+  selectionMode?: 'recommended' | 'manual' | 'fallback';
+};
+
+interface IChatConversation<T, Extra extends Record<string, unknown>> {
   createTime: number;
   modifyTime: number;
   name: string;
   desc?: string;
   id: string;
   type: T;
-  extra: Extra;
+  extra: Extra & {
+    team?: TeamConversationMeta;
+  };
   model: TProviderWithModel;
   status?: 'pending' | 'running' | 'finished' | undefined;
   /** 会话来源，默认为 aionui / Conversation source, defaults to aionui */

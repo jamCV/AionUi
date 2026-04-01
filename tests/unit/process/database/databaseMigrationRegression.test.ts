@@ -879,7 +879,7 @@ describe('database migration regression', () => {
     const messages = database.getConversationMessages('conversation-1', 0, 10);
     const createTurnResult = database.createTurnSnapshot(makeLiveTurnSnapshot());
 
-    expect(driver.getUserVersion()).toBe(19);
+    expect(driver.getUserVersion()).toBe(20);
     expect(driver.indexes.has('idx_turn_files_turn_path')).toBe(true);
     expect(conversations.data).toHaveLength(1);
     expect(conversations.data[0]?.id).toBe('conversation-1');
@@ -915,6 +915,25 @@ describe('database migration regression', () => {
     );
   });
 
+  it('adds team tables and indexes when migrating from v19 to v20', async () => {
+    const { dbPath } = createTempDatabaseHandle();
+    const driver = new MigrationRegressionDriver();
+    driver.seedHistoricalConversation();
+    createDriverMock.mockResolvedValue(driver);
+
+    await AionUIDatabase.create(dbPath);
+
+    expect(driver.getUserVersion()).toBe(20);
+    expect(driver.tables.has('team_runs')).toBe(true);
+    expect(driver.tables.has('team_tasks')).toBe(true);
+    expect(driver.indexes.has('idx_team_runs_main')).toBe(true);
+    expect(driver.indexes.has('idx_team_runs_status')).toBe(true);
+    expect(driver.indexes.has('idx_team_tasks_run')).toBe(true);
+    expect(driver.indexes.has('idx_team_tasks_parent')).toBe(true);
+    expect(driver.indexes.has('idx_team_tasks_sub')).toBe(true);
+    expect(driver.indexes.has('idx_team_tasks_status')).toBe(true);
+  });
+
   it('preserves the existing database file when a migration fails', async () => {
     const { tempDir, dbPath } = createTempDatabaseHandle();
     const driver = new MigrationRegressionDriver({ malformedTurnSchema: true });
@@ -936,7 +955,7 @@ describe('database migration regression', () => {
           String(message).includes('Initialization failed during migration; existing database was preserved') &&
           error instanceof DatabaseMigrationError &&
           error.fromVersion === 18 &&
-          error.toVersion === 19 &&
+          error.toVersion === 20 &&
           error.failedVersion === 19
       )
     ).toBe(true);

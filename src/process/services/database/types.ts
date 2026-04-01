@@ -7,6 +7,7 @@
 // 复用现有的业务类型定义
 import type { ConversationSource, TChatConversation, IConfigStorageRefer } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
+import type { TeamRunPhase, TeamRunStatus, TeamSelectionMode, TeamTaskStatus } from '@process/team/teamTypes';
 
 /**
  * ======================
@@ -108,6 +109,107 @@ export type TurnReviewStatus = 'pending' | 'kept' | 'reverted' | 'conflict' | 'u
 export type TurnFileAction = 'create' | 'update' | 'delete';
 
 export type TurnLifecycleStatus = 'running' | 'completed' | 'interrupted';
+
+export type TeamRunRow = {
+  id: string;
+  main_conversation_id: string;
+  root_conversation_id: string;
+  status: string;
+  current_phase: string;
+  awaiting_user_input: number;
+  active_task_count: number;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TeamTaskRow = {
+  id: string;
+  run_id: string;
+  parent_conversation_id: string;
+  sub_conversation_id: string | null;
+  assistant_id: string | null;
+  assistant_name: string | null;
+  status: string;
+  title: string;
+  task_prompt: string;
+  expected_output: string | null;
+  selection_mode: string;
+  selection_reason: string | null;
+  owned_paths_json: string;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TeamRun = {
+  id: string;
+  mainConversationId: string;
+  rootConversationId: string;
+  status: TeamRunStatus;
+  currentPhase: TeamRunPhase;
+  awaitingUserInput: boolean;
+  activeTaskCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type TeamTask = {
+  id: string;
+  runId: string;
+  parentConversationId: string;
+  subConversationId?: string;
+  assistantId?: string;
+  assistantName?: string;
+  status: TeamTaskStatus;
+  title: string;
+  taskPrompt: string;
+  expectedOutput?: string;
+  selectionMode: TeamSelectionMode;
+  selectionReason?: string;
+  ownedPaths: string[];
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type CreateTeamRunInput = Omit<TeamRun, 'createdAt' | 'updatedAt'> & {
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type CreateTeamTaskInput = Omit<TeamTask, 'createdAt' | 'updatedAt'> & {
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type UpdateTeamRunInput = {
+  id: string;
+  mainConversationId?: string;
+  rootConversationId?: string;
+  status?: TeamRunStatus;
+  currentPhase?: TeamRunPhase;
+  awaitingUserInput?: boolean;
+  activeTaskCount?: number;
+  updatedAt?: number;
+};
+
+export type UpdateTeamTaskInput = {
+  id: string;
+  runId?: string;
+  parentConversationId?: string;
+  subConversationId?: string;
+  assistantId?: string;
+  assistantName?: string;
+  status?: TeamTaskStatus;
+  title?: string;
+  taskPrompt?: string;
+  expectedOutput?: string;
+  selectionMode?: TeamSelectionMode;
+  selectionReason?: string;
+  ownedPaths?: string[];
+  lastError?: string;
+  updatedAt?: number;
+};
 
 export type TurnSnapshotRow = {
   id: string;
@@ -450,6 +552,89 @@ export function rowToTurnSnapshotFile(row: TurnSnapshotFileRow): TurnSnapshotFil
     sourceMessageIds: parseStringArray(row.source_message_ids),
     revertSupported: row.revert_supported === 1,
     revertError: row.revert_error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const parseNullableStringArray = (rawValue: string | null): string[] => {
+  if (!rawValue) {
+    return [];
+  }
+  return parseStringArray(rawValue);
+};
+
+export function teamRunToRow(run: CreateTeamRunInput): TeamRunRow {
+  const createdAt = run.createdAt ?? Date.now();
+  const updatedAt = run.updatedAt ?? createdAt;
+
+  return {
+    id: run.id,
+    main_conversation_id: run.mainConversationId,
+    root_conversation_id: run.rootConversationId,
+    status: run.status,
+    current_phase: run.currentPhase,
+    awaiting_user_input: run.awaitingUserInput ? 1 : 0,
+    active_task_count: run.activeTaskCount,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export function teamTaskToRow(task: CreateTeamTaskInput): TeamTaskRow {
+  const createdAt = task.createdAt ?? Date.now();
+  const updatedAt = task.updatedAt ?? createdAt;
+
+  return {
+    id: task.id,
+    run_id: task.runId,
+    parent_conversation_id: task.parentConversationId,
+    sub_conversation_id: task.subConversationId ?? null,
+    assistant_id: task.assistantId ?? null,
+    assistant_name: task.assistantName ?? null,
+    status: task.status,
+    title: task.title,
+    task_prompt: task.taskPrompt,
+    expected_output: task.expectedOutput ?? null,
+    selection_mode: task.selectionMode,
+    selection_reason: task.selectionReason ?? null,
+    owned_paths_json: JSON.stringify(task.ownedPaths),
+    last_error: task.lastError ?? null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export function rowToTeamRun(row: TeamRunRow): TeamRun {
+  return {
+    id: row.id,
+    mainConversationId: row.main_conversation_id,
+    rootConversationId: row.root_conversation_id,
+    status: row.status as TeamRunStatus,
+    currentPhase: row.current_phase as TeamRunPhase,
+    awaitingUserInput: row.awaiting_user_input === 1,
+    activeTaskCount: row.active_task_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function rowToTeamTask(row: TeamTaskRow): TeamTask {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    parentConversationId: row.parent_conversation_id,
+    subConversationId: row.sub_conversation_id ?? undefined,
+    assistantId: row.assistant_id ?? undefined,
+    assistantName: row.assistant_name ?? undefined,
+    status: row.status as TeamTaskStatus,
+    title: row.title,
+    taskPrompt: row.task_prompt,
+    expectedOutput: row.expected_output ?? undefined,
+    selectionMode: row.selection_mode as TeamSelectionMode,
+    selectionReason: row.selection_reason ?? undefined,
+    ownedPaths: parseNullableStringArray(row.owned_paths_json),
+    lastError: row.last_error ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

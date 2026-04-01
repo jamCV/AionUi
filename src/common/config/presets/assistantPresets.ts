@@ -442,6 +442,38 @@ export const ASSISTANT_PRESETS: AssistantPreset[] = [
     },
   },
   {
+    id: 'long-task-codex',
+    avatar: '🧭',
+    presetAgentType: 'codex',
+    resourceDir: 'src/process/resources/assistant/long-task-codex',
+    ruleFiles: {
+      'en-US': 'long-task-codex.md',
+      'zh-CN': 'long-task-codex.zh-CN.md',
+    },
+    nameI18n: {
+      'en-US': 'Long Task Codex',
+      'zh-CN': '长任务助手 Codex',
+    },
+    descriptionI18n: {
+      'en-US':
+        'Codex-based assistant for multi-step engineering work. Uses task_plan.md, findings.md, and progress.md for persistent tracking, but still handles lightweight requests and short stories directly.',
+      'zh-CN':
+        '面向多步骤工程任务的 Codex 助手。用 task_plan.md、findings.md 和 progress.md 持续跟踪复杂工作，同时也能直接处理轻量请求和短篇小故事。',
+    },
+    promptsI18n: {
+      'en-US': [
+        'Analyze this repository, create a staged refactor plan, and keep task_plan.md, findings.md, and progress.md updated as you work',
+        'Implement a cross-file feature in this workspace with milestones, risks, and verification notes tracked on disk',
+        'Tell me a short story about a maintenance robot who finds a paper map in a digital city',
+      ],
+      'zh-CN': [
+        '分析这个仓库，做一个分阶段重构计划，并在执行过程中持续更新 task_plan.md、findings.md 和 progress.md',
+        '在这个工作区里实现一个跨多个文件的功能，把里程碑、风险和验证记录持续写进文件',
+        '给我讲一个小故事：一台维修机器人在数字城市里捡到了一张纸质地图',
+      ],
+    },
+  },
+  {
     id: 'human-3-coach',
     avatar: '🧭',
     presetAgentType: 'gemini',

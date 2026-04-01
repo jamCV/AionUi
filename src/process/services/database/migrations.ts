@@ -1205,6 +1205,67 @@ const migration_v19: IMigration = {
   },
 };
 
+const migration_v20: IMigration = {
+  version: 20,
+  name: 'Add team run and task tables',
+  up: (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS team_runs (
+      id TEXT PRIMARY KEY,
+      main_conversation_id TEXT NOT NULL,
+      root_conversation_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      current_phase TEXT NOT NULL,
+      awaiting_user_input INTEGER NOT NULL DEFAULT 0,
+      active_task_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (main_conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (root_conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_team_runs_main ON team_runs(main_conversation_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_team_runs_status ON team_runs(status)');
+
+    db.exec(`CREATE TABLE IF NOT EXISTS team_tasks (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      parent_conversation_id TEXT NOT NULL,
+      sub_conversation_id TEXT,
+      assistant_id TEXT,
+      assistant_name TEXT,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      task_prompt TEXT NOT NULL,
+      expected_output TEXT,
+      selection_mode TEXT NOT NULL,
+      selection_reason TEXT,
+      owned_paths_json TEXT NOT NULL,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES team_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (sub_conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_team_tasks_run ON team_tasks(run_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_team_tasks_parent ON team_tasks(parent_conversation_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_team_tasks_sub ON team_tasks(sub_conversation_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_team_tasks_status ON team_tasks(status)');
+
+    console.log('[Migration v20] Added team run and task tables');
+  },
+  down: (db) => {
+    db.exec('DROP INDEX IF EXISTS idx_team_tasks_status');
+    db.exec('DROP INDEX IF EXISTS idx_team_tasks_sub');
+    db.exec('DROP INDEX IF EXISTS idx_team_tasks_parent');
+    db.exec('DROP INDEX IF EXISTS idx_team_tasks_run');
+    db.exec('DROP TABLE IF EXISTS team_tasks');
+    db.exec('DROP INDEX IF EXISTS idx_team_runs_status');
+    db.exec('DROP INDEX IF EXISTS idx_team_runs_main');
+    db.exec('DROP TABLE IF EXISTS team_runs');
+    console.log('[Migration v20] Rolled back: Removed team run and task tables');
+  },
+};
+
 /**
  * All migrations in order
  */
@@ -1213,7 +1274,7 @@ export const ALL_MIGRATIONS: IMigration[] = [
   migration_v1, migration_v2, migration_v3, migration_v4, migration_v5, migration_v6,
   migration_v7, migration_v8, migration_v9, migration_v10, migration_v11, migration_v12,
   migration_v13, migration_v14, migration_v15, migration_v16, migration_v17, migration_v18,
-  migration_v19,
+  migration_v19, migration_v20,
 ];
 
 /**

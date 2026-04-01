@@ -231,18 +231,29 @@ class CodexAgentManager extends BaseAgentManager<CodexAgentManagerData> implemen
     }
   }
 
-  async sendMessage(data: { content: string; files?: string[]; msg_id?: string; cronMeta?: CronMessageMeta }) {
+  async sendMessage(data: {
+    content: string;
+    agentContent?: string;
+    files?: string[];
+    msg_id?: string;
+    cronMeta?: CronMessageMeta;
+    skipPersistUserMessage?: boolean;
+    skipEmitUserMessage?: boolean;
+  }) {
     cronBusyGuard.setProcessing(this.conversation_id, true);
     // Set status to running when message is being processed
     this.status = 'running';
     try {
       await this.bootstrap;
-      const contentToSend = data.content?.includes(AIONUI_FILES_MARKER)
-        ? data.content.split(AIONUI_FILES_MARKER)[0].trimEnd()
-        : data.content;
+      const shouldPersistUserMessage = !data.skipPersistUserMessage;
+      const shouldEmitUserMessage = !data.skipEmitUserMessage;
+      const contentForAgent = data.agentContent ?? data.content;
+      const contentToSend = contentForAgent?.includes(AIONUI_FILES_MARKER)
+        ? contentForAgent.split(AIONUI_FILES_MARKER)[0].trimEnd()
+        : contentForAgent;
 
       // Save user message to chat history only (renderer already inserts right-hand bubble)
-      if (data.msg_id && data.content) {
+      if (data.msg_id && data.content && shouldPersistUserMessage) {
         const userMessage: TMessage = {
           id: data.msg_id,
           msg_id: data.msg_id,
@@ -258,7 +269,7 @@ class CodexAgentManager extends BaseAgentManager<CodexAgentManagerData> implemen
         addMessage(this.conversation_id, userMessage);
         // Emit user_content IPC for cron messages so the frontend can display them
         // even if the component mounts after the DB save but before the DB load completes.
-        if (data.cronMeta) {
+        if (data.cronMeta && shouldEmitUserMessage) {
           const userResponseMessage: IResponseMessage = {
             type: 'user_content',
             conversation_id: this.conversation_id,

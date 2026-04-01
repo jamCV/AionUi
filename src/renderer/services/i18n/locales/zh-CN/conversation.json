@@ -210,6 +210,45 @@
       "failed": "撤销未能完整恢复所有文件。"
     }
   },
+  "team": {
+    "title": "协作运行",
+    "taskCount": "{{count}} 个任务",
+    "activeTaskCount": "{{count}} 个任务仍在进行",
+    "awaitingUserInput": "等待你的确认后继续。",
+    "empty": "暂时还没有委派任务。",
+    "assistantLabel": "助手：{{assistant}}",
+    "assistantUnavailable": "尚未分配助手",
+    "childConversationName": "子会话：{{name}}",
+    "openConversation": "打开",
+    "openConversationFailed": "打开子会话失败",
+    "runStatus": {
+      "running": "进行中",
+      "waiting_user": "等待用户",
+      "completed": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "phase": {
+      "delegating": "正在委派",
+      "subtask_running": "子任务执行中",
+      "continuing_main": "继续主会话",
+      "completed": "已完成",
+      "failed": "失败"
+    },
+    "taskStatus": {
+      "queued": "排队中",
+      "running": "进行中",
+      "waiting_user": "等待用户",
+      "completed": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "sidebarStatus": {
+      "pending": "待开始",
+      "running": "进行中",
+      "finished": "已结束"
+    }
+  },
   "skill_generator": {
     "title": "生成 Skill/规则",
     "generate": "生成",

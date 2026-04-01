@@ -79,6 +79,14 @@ export const conversation = {
     revert: bridge.buildProvider<TurnSnapshotRevertResult, { turnId: string }>('conversation.turnSnapshot.revert'),
     live: bridge.buildEmitter<TurnSnapshotLiveEvent>('conversation.turnSnapshot.live'),
   },
+  team: {
+    getRunView: bridge.buildProvider<IConversationTeamRunView | null, { conversation_id: string }>(
+      'conversation.team.get-run-view'
+    ),
+    listChildConversations: bridge.buildProvider<IConversationTeamChildConversation[], { conversation_id: string }>(
+      'conversation.team.list-child-conversations'
+    ),
+  },
   confirmation: {
     add: bridge.buildEmitter<IConfirmation<any> & { conversation_id: string }>('confirmation.add'),
     update: bridge.buildEmitter<IConfirmation<any> & { conversation_id: string }>('confirmation.update'),
@@ -918,6 +926,63 @@ export interface IConversationListChangedEvent {
   conversationId: string;
   action: 'created' | 'updated' | 'deleted';
   source?: string;
+}
+
+export type IConversationTeamRunStatus = 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
+export type IConversationTeamTaskStatus = 'queued' | 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
+export type IConversationTeamSelectionMode = 'recommended' | 'manual' | 'fallback';
+
+export interface IConversationTeamRunSummary {
+  id: string;
+  mainConversationId: string;
+  rootConversationId: string;
+  status: IConversationTeamRunStatus;
+  currentPhase: 'delegating' | 'subtask_running' | 'continuing_main' | 'completed' | 'failed';
+  awaitingUserInput: boolean;
+  activeTaskCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface IConversationTeamTaskView {
+  id: string;
+  runId: string;
+  parentConversationId: string;
+  subConversationId?: string;
+  assistantId?: string;
+  assistantName?: string;
+  status: IConversationTeamTaskStatus;
+  title: string;
+  taskPrompt: string;
+  expectedOutput?: string;
+  selectionMode: IConversationTeamSelectionMode;
+  selectionReason?: string;
+  ownedPaths: string[];
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+  summary?: string;
+  touchedFiles: string[];
+}
+
+export interface IConversationTeamRunView {
+  run: IConversationTeamRunSummary;
+  tasks: IConversationTeamTaskView[];
+}
+
+export interface IConversationTeamChildConversation {
+  taskId: string;
+  parentConversationId: string;
+  rootConversationId: string;
+  subConversationId: string;
+  title: string;
+  assistantId?: string;
+  assistantName?: string;
+  status: IConversationTeamTaskStatus;
+  conversationName: string;
+  conversationStatus?: TChatConversation['status'];
+  updatedAt: number;
+  summary?: string;
 }
 interface IBridgeResponse<D = {}> {
   success: boolean;

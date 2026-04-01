@@ -16,6 +16,7 @@ import type AcpAgentManager from '../task/AcpAgentManager';
 import type { GeminiAgentManager } from '../task/GeminiAgentManager';
 import type OpenClawAgentManager from '../task/OpenClawAgentManager';
 import { prepareFirstMessage } from '../task/agentUtils';
+import { teamOrchestratorService } from '@process/team/teamServiceSingleton';
 import { refreshTrayMenu } from '@process/utils/tray';
 import { copyFilesToDirectory, readDirectoryRecursive } from '@process/utils';
 import { computeOpenClawIdentityHash } from '@process/utils/openclawUtils';
@@ -165,6 +166,14 @@ export function initConversationBridge(
 
   ipcBridge.conversation.turnSnapshot.revert.provider(async ({ turnId }) => {
     return turnSnapshotService.revertTurn(turnId);
+  });
+
+  ipcBridge.conversation.team.getRunView.provider(async ({ conversation_id }) => {
+    return teamOrchestratorService.getTeamRunView(conversation_id);
+  });
+
+  ipcBridge.conversation.team.listChildConversations.provider(async ({ conversation_id }) => {
+    return teamOrchestratorService.listChildConversations(conversation_id);
   });
 
   ipcBridge.conversation.getAssociateConversation.provider(async ({ conversation_id }) => {

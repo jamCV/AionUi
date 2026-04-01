@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
+import type { TChatConversation } from '../../src/common/config/storage';
 import type { TimelineSection } from '../../src/renderer/pages/conversation/GroupedHistory/types';
 
 // ── localStorage mock ────────────────────────────────────────────────────────
@@ -31,13 +32,16 @@ vi.mock('react-router-dom', () => ({
 }));
 
 // Shared ref so the hoisted mock factory can read the latest value
-const testState = { sections: [] as TimelineSection[] };
+const testState = {
+  sections: [] as TimelineSection[],
+  conversations: [] as TChatConversation[],
+};
 
 const mockSetActiveConversation = vi.fn();
 
 vi.mock('../../src/renderer/hooks/context/ConversationHistoryContext', () => ({
   useConversationHistoryContext: () => ({
-    conversations: [],
+    conversations: testState.conversations,
     isConversationGenerating: () => false,
     hasCompletionUnread: () => false,
     clearCompletionUnread: () => {},
@@ -68,6 +72,8 @@ vi.mock('../../src/renderer/pages/conversation/GroupedHistory/utils/groupingHelp
     pinnedConversations: [],
     timelineSections: testState.sections,
   }),
+  getTeamParentConversationId: (conversation: TChatConversation) =>
+    conversation.extra?.team?.role === 'subagent' ? conversation.extra.team.parentConversationId : undefined,
 }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -89,6 +95,25 @@ const makeWorkspaceSection = (workspaces: string[]): TimelineSection[] => [
   },
 ];
 
+const makeConversation = (id: string, overrides?: Partial<TChatConversation>): TChatConversation =>
+  ({
+    id,
+    name: id,
+    createTime: Date.now(),
+    modifyTime: Date.now(),
+    type: 'gemini',
+    model: {
+      id: 'provider-1',
+      name: 'Gemini',
+      useModel: 'gemini-2.5-pro',
+      platform: 'gemini-with-google-auth',
+      baseUrl: '',
+      apiKey: '',
+    },
+    extra: {},
+    ...overrides,
+  }) as TChatConversation;
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 // Import the hook statically since mocks are hoisted
@@ -98,6 +123,7 @@ describe('useConversations - workspace expansion', () => {
   beforeEach(() => {
     storageMap.clear();
     testState.sections = [];
+    testState.conversations = [];
     mockSetActiveConversation.mockReset();
   });
 
@@ -183,5 +209,40 @@ describe('useConversations - workspace expansion', () => {
 
     // Should stay collapsed, not re-expand
     expect(result.current.expandedWorkspaces).toEqual([]);
+  });
+
+  it('should group subagent conversations under their parent conversation', async () => {
+    const parentConversation = makeConversation('parent-conversation');
+    const childConversation = makeConversation('child-conversation', {
+      extra: {
+        team: {
+          runId: 'run-1',
+          role: 'subagent',
+          rootConversationId: 'parent-conversation',
+          parentConversationId: 'parent-conversation',
+          assistantName: 'Research Assistant',
+        },
+      },
+    });
+    const orphanConversation = makeConversation('orphan-conversation', {
+      extra: {
+        team: {
+          runId: 'run-2',
+          role: 'subagent',
+          rootConversationId: 'missing-parent',
+          parentConversationId: 'missing-parent',
+        },
+      },
+    });
+
+    testState.conversations = [parentConversation, childConversation, orphanConversation];
+
+    const { result } = renderHook(() => useConversations());
+    await act(async () => {});
+
+    expect(result.current.teamChildMap.get('parent-conversation')?.map((conversation) => conversation.id)).toEqual([
+      'child-conversation',
+    ]);
+    expect(result.current.teamChildMap.has('missing-parent')).toBe(false);
   });
 });

@@ -210,6 +210,45 @@
       "failed": "すべてのファイルを復元する前に、元に戻す処理が失敗しました。"
     }
   },
+  "team": {
+    "title": "チーム実行",
+    "taskCount": "タスク {{count}} 件",
+    "activeTaskCount": "進行中のタスク {{count}} 件",
+    "awaitingUserInput": "続行するには確認が必要です。",
+    "empty": "委譲されたタスクはまだありません。",
+    "assistantLabel": "アシスタント: {{assistant}}",
+    "assistantUnavailable": "アシスタントはまだ割り当てられていません",
+    "childConversationName": "子会話: {{name}}",
+    "openConversation": "開く",
+    "openConversationFailed": "子会話を開けませんでした",
+    "runStatus": {
+      "running": "実行中",
+      "waiting_user": "ユーザー待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み"
+    },
+    "phase": {
+      "delegating": "委譲中",
+      "subtask_running": "サブタスク実行中",
+      "continuing_main": "メイン会話を継続中",
+      "completed": "完了",
+      "failed": "失敗"
+    },
+    "taskStatus": {
+      "queued": "待機中",
+      "running": "実行中",
+      "waiting_user": "ユーザー待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み"
+    },
+    "sidebarStatus": {
+      "pending": "保留",
+      "running": "実行中",
+      "finished": "終了"
+    }
+  },
   "skill_generator": {
     "title": "Generate Skill/Rule",
     "generate": "Generate",
