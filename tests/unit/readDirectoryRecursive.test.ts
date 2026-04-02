@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { IDirOrFile } from '@/common/adapter/ipcBridge';
 import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -173,6 +174,43 @@ describe('readDirectoryRecursive', () => {
     expect(noAccess.children).toEqual([]);
 
     readdirSpy.mockRestore();
+  });
+
+  it('bypasses ignore rules when applyIgnoreRules is false', async () => {
+    await fsp.mkdir(path.join(tmpDir, '.agent'));
+    await fsp.writeFile(path.join(tmpDir, '.agent', 'config.json'), '{}');
+
+    const shouldIgnoreFile = vi.fn((targetPath: string) => targetPath.includes(`${path.sep}.agent`));
+    const ac = new AbortController();
+    const result = (await readDirectoryRecursive(tmpDir, {
+      maxDepth: 2,
+      abortController: ac,
+      fileService: { shouldIgnoreFile },
+      applyIgnoreRules: false,
+    })) as IDirOrFile;
+
+    expect(result.children.map((c) => c.name)).toContain('.agent');
+    const agentDir = result.children.find((c) => c.name === '.agent');
+    expect(agentDir).toBeDefined();
+    expect(agentDir?.isDir).toBe(true);
+    expect(agentDir?.children.map((c) => c.name)).toContain('config.json');
+    expect(shouldIgnoreFile).not.toHaveBeenCalled();
+  });
+
+  it('applies ignore rules by default', async () => {
+    await fsp.mkdir(path.join(tmpDir, '.agent'));
+    await fsp.writeFile(path.join(tmpDir, '.agent', 'config.json'), '{}');
+
+    const shouldIgnoreFile = vi.fn((targetPath: string) => targetPath.includes(`${path.sep}.agent`));
+    const ac = new AbortController();
+    const result = (await readDirectoryRecursive(tmpDir, {
+      maxDepth: 2,
+      abortController: ac,
+      fileService: { shouldIgnoreFile },
+    })) as IDirOrFile;
+
+    expect(result.children.map((c) => c.name)).not.toContain('.agent');
+    expect(shouldIgnoreFile).toHaveBeenCalled();
   });
 
   it('skips node_modules directory', async () => {

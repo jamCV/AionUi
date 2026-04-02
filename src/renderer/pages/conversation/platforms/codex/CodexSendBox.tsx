@@ -67,9 +67,27 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
     subject: '',
   });
 
+  const runningRef = useRef(running);
+  const aiProcessingRef = useRef(aiProcessing);
+
   // Track whether current turn has content output
   // Only reset aiProcessing when finish arrives after content (not after tool calls)
   const hasContentInTurnRef = useRef(false);
+
+  const setRunningState = useCallback((value: boolean) => {
+    runningRef.current = value;
+    setRunning(value);
+  }, []);
+
+  const setAiProcessingState = useCallback((value: boolean) => {
+    aiProcessingRef.current = value;
+    setAiProcessing(value);
+  }, []);
+
+  const setBusy = useCallback((value: boolean) => {
+    setRunningState(value);
+    setAiProcessingState(value);
+  }, [setAiProcessingState, setRunningState]);
 
   // Think 消息节流：限制更新频率，减少渲染次数
   // Throttle thought updates to reduce render frequency
@@ -163,8 +181,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
 
   // Reset state when conversation changes and restore actual running status
   useEffect(() => {
-    setRunning(false);
-    setAiProcessing(false);
+    setBusy(false);
     setCodexStatus(null);
     setThought({ subject: '', description: '' });
     hasContentInTurnRef.current = false;
@@ -173,10 +190,10 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
     void ipcBridge.conversation.get.invoke({ id: conversation_id }).then((res) => {
       if (!res) return;
       if (res.status === 'running') {
-        setAiProcessing(true);
+        setBusy(true);
       }
     });
-  }, [conversation_id]);
+  }, [conversation_id, setBusy]);
 
   // 注册预览面板添加到发送框的 handler
   // Register handler for adding text from preview panel to sendbox
@@ -209,7 +226,9 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
 
       switch (message.type) {
         case 'thought':
-          throttledSetThought(message.data as ThoughtData);
+          if (runningRef.current || aiProcessingRef.current) {
+            throttledSetThought(message.data as ThoughtData);
+          }
           break;
         case 'codex_model_info':
           // Handled by AcpModelSelector, ignore here
@@ -220,8 +239,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
           if (hasContentInTurnRef.current) {
             // Immediate state reset (notification is handled by centralized hook)
             // 立即重置状态（通知由集中化 hook 处理）
-            setRunning(false);
-            setAiProcessing(false);
+            setBusy(false);
             setThought({ subject: '', description: '' });
           }
           // Reset flag for next turn
@@ -258,7 +276,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
         }
       }
     });
-  }, [conversation_id, addOrUpdateMessage]);
+  }, [conversation_id, addOrUpdateMessage, aiProcessing, running, setBusy]);
 
   useEffect(() => {
     void ipcBridge.conversation.get.invoke({ id: conversation_id }).then((res) => {
@@ -352,7 +370,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
       createdAt: Date.now(),
     };
     addOrUpdateMessage(userMessage, true); // 立即保存到存储，避免刷新丢失
-    setAiProcessing(true);
+    setAiProcessingState(true);
     try {
       // 提取实际的文件路径发送给后端
       await ipcBridge.codexConversation.sendMessage.invoke({
@@ -405,7 +423,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
 
       try {
         // Set waiting state when processing initial message
-        setAiProcessing(true);
+        setAiProcessingState(true);
 
         const { input, files = [] } = JSON.parse(stored) as { input: string; files?: string[] };
         // 使用固定的msg_id，基于conversation_id确保唯一性
@@ -443,7 +461,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
         // 发送失败时清理处理标记，允许重试
         sessionStorage.removeItem(processedKey);
         // Only reset aiProcessing on error, normal flow is reset by 'finish' event
-        setAiProcessing(false);
+        setAiProcessingState(false);
       }
     };
 
@@ -465,8 +483,7 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
     try {
       await ipcBridge.conversation.stop.invoke({ conversation_id });
     } finally {
-      setRunning(false);
-      setAiProcessing(false);
+      setBusy(false);
       setThought({ subject: '', description: '' });
       hasContentInTurnRef.current = false;
     }

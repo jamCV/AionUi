@@ -131,6 +131,7 @@ export async function readDirectoryRecursive(
     root?: string;
     abortController?: AbortController;
     fileService?: { shouldIgnoreFile(path: string): boolean };
+    applyIgnoreRules?: boolean;
     maxDepth?: number;
     search?: {
       text: string;
@@ -139,7 +140,7 @@ export async function readDirectoryRecursive(
     };
   }
 ): Promise<IDirOrFile> {
-  const { root = dirPath, maxDepth = 1, fileService, search, abortController } = options || {};
+  const { root = dirPath, maxDepth = 1, fileService, applyIgnoreRules = true, search, abortController } = options || {};
   const { text: searchText, onProcess: onSearchProcess = () => {}, process = { file: 0, dir: 1 } } = search || {};
 
   const matchSearch = searchText ? (fullPath: string) => fullPath.includes(searchText) : (_: string) => false;
@@ -185,7 +186,7 @@ export async function readDirectoryRecursive(
     checkStatus();
     if (item === 'node_modules') continue;
     const itemPath = path.join(dirPath, item);
-    if (fileService && fileService.shouldIgnoreFile(itemPath)) continue;
+    if (applyIgnoreRules && fileService && fileService.shouldIgnoreFile(itemPath)) continue;
 
     let itemStats: Awaited<ReturnType<typeof fs.stat>>;
     try {

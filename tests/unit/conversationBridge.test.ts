@@ -249,6 +249,32 @@ describe('conversationBridge', () => {
   });
 
   describe('getWorkspace — ENOENT handling', () => {
+    it('passes applyIgnoreRules false to workspace tree reads', async () => {
+      const utilsMod = await vi.importMock<typeof import('../../src/process/utils')>('../../src/process/utils');
+      const tree = {
+        name: '.agent',
+        fullPath: '/ws/.agent',
+        relativePath: '.agent',
+        isDir: true,
+        isFile: false,
+        children: [],
+      };
+      utilsMod.readDirectoryRecursive.mockResolvedValueOnce(tree);
+
+      const handler = handlers['getWorkspace'];
+      const result = await handler({ workspace: '/ws', path: '/ws', search: '' });
+
+      expect(utilsMod.readDirectoryRecursive).toHaveBeenCalledWith(
+        '/ws',
+        expect.objectContaining({
+          root: '/ws',
+          applyIgnoreRules: false,
+          maxDepth: 10,
+        })
+      );
+      expect(result).toEqual([tree]);
+    });
+
     it('returns empty array when buildFileServer throws', async () => {
       const geminiMod = await vi.importMock<typeof import('../../src/agent/gemini')>('../../src/agent/gemini');
       geminiMod.GeminiAgent.buildFileServer.mockImplementation(() => {

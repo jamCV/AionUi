@@ -455,6 +455,7 @@ export function initConversationBridge(
       return await readDirectoryRecursive(path, {
         root: workspace,
         fileService,
+        applyIgnoreRules: false,
         abortController: buildLastAbortController(),
         maxDepth: 10, // 支持更深的目录结构 / Support deeper directory structures
         search: {
