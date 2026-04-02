@@ -86,6 +86,26 @@ export const conversation = {
     listChildConversations: bridge.buildProvider<IConversationTeamChildConversation[], { conversation_id: string }>(
       'conversation.team.list-child-conversations'
     ),
+    listAvailableAssistants: bridge.buildProvider<IConversationTeamAssistantDescriptor[], { conversation_id: string }>(
+      'conversation.team.list-available-assistants'
+    ),
+    delegateFromUser: bridge.buildProvider<
+      IBridgeResponse<{ taskId: string; runId: string }>,
+      IConversationTeamDelegateFromUserParams
+    >('conversation.team.delegate-from-user'),
+    stopTask: bridge.buildProvider<IBridgeResponse<{ taskId: string }>, { conversation_id: string; task_id: string }>(
+      'conversation.team.stop-task'
+    ),
+    retryTask: bridge.buildProvider<IBridgeResponse<{ taskId: string }>, { conversation_id: string; task_id: string }>(
+      'conversation.team.retry-task'
+    ),
+    cancelTask: bridge.buildProvider<IBridgeResponse<{ taskId: string }>, { conversation_id: string; task_id: string }>(
+      'conversation.team.cancel-task'
+    ),
+    renameTaskAlias: bridge.buildProvider<
+      IBridgeResponse<{ taskId: string; displayAlias?: string }>,
+      { conversation_id: string; task_id: string; display_alias?: string }
+    >('conversation.team.rename-task-alias'),
   },
   confirmation: {
     add: bridge.buildEmitter<IConfirmation<any> & { conversation_id: string }>('confirmation.add'),
@@ -929,7 +949,15 @@ export interface IConversationListChangedEvent {
 }
 
 export type IConversationTeamRunStatus = 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
-export type IConversationTeamTaskStatus = 'queued' | 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
+export type IConversationTeamTaskStatus =
+  | 'queued'
+  | 'bootstrapping'
+  | 'running'
+  | 'waiting_user'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+  | 'cancelled';
 export type IConversationTeamSelectionMode = 'recommended' | 'manual' | 'fallback';
 
 export interface IConversationTeamRunSummary {
@@ -957,8 +985,12 @@ export interface IConversationTeamTaskView {
   expectedOutput?: string;
   selectionMode: IConversationTeamSelectionMode;
   selectionReason?: string;
+  displayAlias?: string;
   ownedPaths: string[];
   lastError?: string;
+  triggerSource?: 'user_explicit' | 'agent_auto';
+  requestedByMessageId?: string;
+  resumeCount: number;
   createdAt: number;
   updatedAt: number;
   summary?: string;
@@ -978,12 +1010,33 @@ export interface IConversationTeamChildConversation {
   title: string;
   assistantId?: string;
   assistantName?: string;
+  displayAlias?: string;
   status: IConversationTeamTaskStatus;
   conversationName: string;
   conversationStatus?: TChatConversation['status'];
   updatedAt: number;
   summary?: string;
 }
+
+export interface IConversationTeamAssistantDescriptor {
+  id: string;
+  name: string;
+  alias?: string;
+  runtime: 'codex' | 'gemini' | 'acp';
+  backend?: string;
+  source: 'preset' | 'custom' | 'extension' | 'fallback';
+}
+
+export type IConversationTeamDelegateFromUserParams = {
+  conversation_id: string;
+  msg_id: string;
+  input: string;
+  files?: string[];
+  delegation: {
+    assistantId: string;
+    displayAlias?: string;
+  };
+};
 interface IBridgeResponse<D = {}> {
   success: boolean;
   data?: D;

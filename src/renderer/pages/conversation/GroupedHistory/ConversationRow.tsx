@@ -51,7 +51,9 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
   const isPinned = isConversationPinned(conversation);
   const cronStatus = getJobStatus(conversation.id);
   const siderTooltipProps = getSiderTooltipProps(tooltipEnabled);
-  const inlineNameTooltipEnabled = !collapsed && !isMobile && !!conversation.name;
+  const displayName =
+    conversation.extra?.team?.displayAlias || conversation.name || t('conversation.welcome.newConversation');
+  const inlineNameTooltipEnabled = !collapsed && !isMobile && !!displayName;
 
   const renderLeadingIcon = () => {
     if (cronStatus !== 'none') {
@@ -100,12 +102,7 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
   };
 
   return (
-    <Tooltip
-      key={conversation.id}
-      {...siderTooltipProps}
-      content={conversation.name || t('conversation.welcome.newConversation')}
-      position='right'
-    >
+    <Tooltip key={conversation.id} {...siderTooltipProps} content={displayName} position='right'>
       <div
         id={'c-' + conversation.id}
         className={classNames(
@@ -132,7 +129,7 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
         {isGenerating && !batchMode ? <Spin size={16} className='flex-shrink-0' /> : renderLeadingIcon()}
         <FlexFullContainer className='h-24px min-w-0 flex-1 collapsed-hidden ml-10px pr-18px'>
           <Tooltip
-            content={conversation.name}
+            content={displayName}
             disabled={!inlineNameTooltipEnabled}
             trigger='hover'
             popupVisible={inlineNameTooltipEnabled ? undefined : false}
@@ -146,7 +143,7 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
                 selected && !batchMode ? 'text-1 font-medium' : 'text-2'
               )}
             >
-              <span className='block overflow-hidden text-ellipsis whitespace-nowrap'>{conversation.name}</span>
+              <span className='block overflow-hidden text-ellipsis whitespace-nowrap'>{displayName}</span>
             </div>
           </Tooltip>
         </FlexFullContainer>

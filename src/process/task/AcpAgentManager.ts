@@ -24,6 +24,8 @@ import { handlePreviewOpenEvent } from '@process/utils/previewUtils';
 import { cronBusyGuard } from '@process/services/cron/CronBusyGuard';
 import { mainLog, mainWarn, mainError } from '@process/utils/mainLogger';
 import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
+import { TeamHiddenCommandCodec } from '@process/team/TeamHiddenCommandCodec';
+import type { TeamCommand } from '@process/team/teamTypes';
 /** Enable ACP performance diagnostics via ACP_PERF=1 */
 const ACP_PERF_LOG = process.env.ACP_PERF === '1';
 
@@ -82,6 +84,10 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
   private acpAvailableSlashWaiters: Array<(commands: SlashCommandItem[]) => void> = [];
   private readonly streamDbFlushIntervalMs = 120;
   private readonly bufferedStreamTextMessages = new Map<string, BufferedStreamTextMessage>();
+  private readonly hiddenCommandCodec = new TeamHiddenCommandCodec();
+  private hiddenCommandRawBuffer = '';
+  private hiddenCommandVisibleLength = 0;
+  private latestTeamCommand: TeamCommand | undefined;
 
   constructor(data: AcpAgentManagerData) {
     super('acp', data, new IpcAgentEventEmitter());
@@ -351,9 +357,11 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
             this.saveContextUsage(usageData);
           }
 
+          const sanitizedMessage = this.sanitizeHiddenTeamCommandMessage(message as IResponseMessage);
+
           if (message.type !== 'thought' && message.type !== 'acp_model_info' && message.type !== 'acp_context_usage') {
             const transformStart = Date.now();
-            const tMessage = transformMessage(message as IResponseMessage);
+            const tMessage = transformMessage(sanitizedMessage as IResponseMessage);
             const transformDuration = Date.now() - transformStart;
 
             if (tMessage) {
@@ -363,7 +371,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
                 this.queueBufferedStreamTextMessage(tMessage, data.backend);
               } else {
                 this.flushBufferedStreamTextMessages();
-                addOrUpdateMessage(message.conversation_id, tMessage, data.backend);
+                addOrUpdateMessage(sanitizedMessage.conversation_id, tMessage, data.backend);
                 if (tMessage.type === 'acp_tool_call') {
                   void turnSnapshotCoordinator.trackAcpToolCall(tMessage);
                 }
@@ -396,7 +404,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
           // Filter think tags from streaming content before emitting to UI
           // 在发送到 UI 之前过滤流式内容中的 think 标签
           const filterStart = Date.now();
-          const filteredMessage = this.filterThinkTagsFromMessage(message as IResponseMessage);
+          const filteredMessage = this.filterThinkTagsFromMessage(sanitizedMessage as IResponseMessage);
           const filterDuration = Date.now() - filterStart;
 
           const emitStart = Date.now();
@@ -513,12 +521,16 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
               assistantMessageId,
               completionSignal,
               completionSource,
+              teamCommand: this.latestTeamCommand,
             });
           }
 
           if (completionSignal) {
             this.currentMsgId = null;
             this.currentMsgContent = '';
+            this.hiddenCommandRawBuffer = '';
+            this.hiddenCommandVisibleLength = 0;
+            this.latestTeamCommand = undefined;
           }
         },
       });
@@ -820,6 +832,27 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
     return {
       ...message,
       data: cleanedContent,
+    };
+  }
+
+  private sanitizeHiddenTeamCommandMessage(message: IResponseMessage): IResponseMessage {
+    if (message.type !== 'content' || typeof message.data !== 'string') {
+      return message;
+    }
+
+    this.hiddenCommandRawBuffer += message.data;
+    const extracted = this.hiddenCommandCodec.extractCommands(this.hiddenCommandRawBuffer);
+    if (extracted.length > 0) {
+      this.latestTeamCommand = extracted[extracted.length - 1];
+    }
+
+    const visibleContent = this.hiddenCommandCodec.stripIncrementally(this.hiddenCommandRawBuffer);
+    const delta = visibleContent.slice(this.hiddenCommandVisibleLength);
+    this.hiddenCommandVisibleLength = visibleContent.length;
+
+    return {
+      ...message,
+      data: delta,
     };
   }
 

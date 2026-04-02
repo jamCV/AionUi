@@ -232,11 +232,19 @@
     },
     "taskStatus": {
       "queued": "Sırada",
+      "bootstrapping": "Başlatılıyor",
       "running": "Çalışıyor",
       "waiting_user": "Kullanıcı bekleniyor",
       "completed": "Tamamlandı",
       "failed": "Başarısız",
+      "interrupted": "Kesintiye uğradı",
       "cancelled": "İptal edildi"
+    },
+    "mention": {
+      "title": "Asistana delege et",
+      "hint": "↑/↓ ve Enter ile seç",
+      "empty": "Kullanılabilir asistan yok",
+      "badge": "{{assistant}} asistanına delege edildi"
     },
     "sidebarStatus": {
       "pending": "Bekliyor",

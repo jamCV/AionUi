@@ -197,3 +197,27 @@ resources/bundled-bun
 
 # Server build output
 dist-server/
+.omc/
+.superset/
+
+# Local AionUI/Codex workspace artifacts
+.aionui/cache/
+.aionui/local-launch/
+.agent/
+
+# Local AI tool state files
+.claude/settings.local.json
+
+# Personal scratch docs and notes
+docs/plans/2026-03-26-codex-session-recovery-requirements.md
+docs/superpowers/plans/2026-03-26-aionui-fork-sync.md
+docs/superpowers/specs/2026-03-26-aionui-fork-sync-design.md
+docs/superpowers/specs/2026-03-26-codex-weixin-file-delivery-design.md
+docs/superpowers/specs/2026-03-26-codex-weixin-file-delivery-design.zh-CN.md
+docs/
+findings.md
+progress.md
+task_plan.md
+
+# Local helper code
+src/common/utils/codexMode.ts

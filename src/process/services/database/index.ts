@@ -1600,11 +1600,16 @@ export class AionUIDatabase {
               expected_output,
               selection_mode,
               selection_reason,
+              assistant_binding_json,
+              display_alias,
+              trigger_source,
+              requested_by_message_id,
+              resume_count,
               owned_paths_json,
               last_error,
               created_at,
               updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -1620,6 +1625,11 @@ export class AionUIDatabase {
           row.expected_output,
           row.selection_mode,
           row.selection_reason,
+          row.assistant_binding_json,
+          row.display_alias,
+          row.trigger_source,
+          row.requested_by_message_id,
+          row.resume_count,
           row.owned_paths_json,
           row.last_error,
           row.created_at,
@@ -1709,6 +1719,26 @@ export class AionUIDatabase {
       if (input.selectionReason !== undefined) {
         fields.push('selection_reason = ?');
         args.push(input.selectionReason);
+      }
+      if (input.assistantBinding !== undefined) {
+        fields.push('assistant_binding_json = ?');
+        args.push(input.assistantBinding ? JSON.stringify(input.assistantBinding) : null);
+      }
+      if (input.displayAlias !== undefined) {
+        fields.push('display_alias = ?');
+        args.push(input.displayAlias);
+      }
+      if (input.triggerSource !== undefined) {
+        fields.push('trigger_source = ?');
+        args.push(input.triggerSource);
+      }
+      if (input.requestedByMessageId !== undefined) {
+        fields.push('requested_by_message_id = ?');
+        args.push(input.requestedByMessageId);
+      }
+      if (input.resumeCount !== undefined) {
+        fields.push('resume_count = ?');
+        args.push(input.resumeCount);
       }
       if (input.ownedPaths !== undefined) {
         fields.push('owned_paths_json = ?');

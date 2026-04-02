@@ -7,7 +7,14 @@
 // 复用现有的业务类型定义
 import type { ConversationSource, TChatConversation, IConfigStorageRefer } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
-import type { TeamRunPhase, TeamRunStatus, TeamSelectionMode, TeamTaskStatus } from '@process/team/teamTypes';
+import type {
+  PersistedAssistantBinding,
+  TeamRunPhase,
+  TeamRunStatus,
+  TeamSelectionMode,
+  TeamTaskStatus,
+  TriggerSource,
+} from '@process/team/teamTypes';
 
 /**
  * ======================
@@ -135,6 +142,11 @@ export type TeamTaskRow = {
   expected_output: string | null;
   selection_mode: string;
   selection_reason: string | null;
+  assistant_binding_json: string | null;
+  display_alias: string | null;
+  trigger_source: string | null;
+  requested_by_message_id: string | null;
+  resume_count: number;
   owned_paths_json: string;
   last_error: string | null;
   created_at: number;
@@ -166,6 +178,11 @@ export type TeamTask = {
   expectedOutput?: string;
   selectionMode: TeamSelectionMode;
   selectionReason?: string;
+  assistantBinding?: PersistedAssistantBinding;
+  displayAlias?: string;
+  triggerSource?: TriggerSource;
+  requestedByMessageId?: string;
+  resumeCount: number;
   ownedPaths: string[];
   lastError?: string;
   createdAt: number;
@@ -206,6 +223,11 @@ export type UpdateTeamTaskInput = {
   expectedOutput?: string;
   selectionMode?: TeamSelectionMode;
   selectionReason?: string;
+  assistantBinding?: PersistedAssistantBinding;
+  displayAlias?: string;
+  triggerSource?: TriggerSource;
+  requestedByMessageId?: string;
+  resumeCount?: number;
   ownedPaths?: string[];
   lastError?: string;
   updatedAt?: number;
@@ -598,6 +620,11 @@ export function teamTaskToRow(task: CreateTeamTaskInput): TeamTaskRow {
     expected_output: task.expectedOutput ?? null,
     selection_mode: task.selectionMode,
     selection_reason: task.selectionReason ?? null,
+    assistant_binding_json: task.assistantBinding ? JSON.stringify(task.assistantBinding) : null,
+    display_alias: task.displayAlias ?? null,
+    trigger_source: task.triggerSource ?? null,
+    requested_by_message_id: task.requestedByMessageId ?? null,
+    resume_count: task.resumeCount ?? 0,
     owned_paths_json: JSON.stringify(task.ownedPaths),
     last_error: task.lastError ?? null,
     created_at: createdAt,
@@ -620,6 +647,15 @@ export function rowToTeamRun(row: TeamRunRow): TeamRun {
 }
 
 export function rowToTeamTask(row: TeamTaskRow): TeamTask {
+  let assistantBinding: PersistedAssistantBinding | undefined;
+  if (row.assistant_binding_json) {
+    try {
+      assistantBinding = JSON.parse(row.assistant_binding_json) as PersistedAssistantBinding;
+    } catch {
+      assistantBinding = undefined;
+    }
+  }
+
   return {
     id: row.id,
     runId: row.run_id,
@@ -633,6 +669,11 @@ export function rowToTeamTask(row: TeamTaskRow): TeamTask {
     expectedOutput: row.expected_output ?? undefined,
     selectionMode: row.selection_mode as TeamSelectionMode,
     selectionReason: row.selection_reason ?? undefined,
+    assistantBinding,
+    displayAlias: row.display_alias ?? undefined,
+    triggerSource: (row.trigger_source as TriggerSource | null) ?? undefined,
+    requestedByMessageId: row.requested_by_message_id ?? undefined,
+    resumeCount: row.resume_count ?? 0,
     ownedPaths: parseNullableStringArray(row.owned_paths_json),
     lastError: row.last_error ?? undefined,
     createdAt: row.created_at,

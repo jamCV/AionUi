@@ -1266,6 +1266,33 @@ const migration_v20: IMigration = {
   },
 };
 
+const migration_v21: IMigration = {
+  version: 21,
+  name: 'Add team task binding and recovery columns',
+  up: (db) => {
+    const columns = new Set((db.pragma('table_info(team_tasks)') as Array<{ name: string }>).map((c) => c.name));
+    if (!columns.has('assistant_binding_json')) {
+      db.exec('ALTER TABLE team_tasks ADD COLUMN assistant_binding_json TEXT');
+    }
+    if (!columns.has('display_alias')) {
+      db.exec('ALTER TABLE team_tasks ADD COLUMN display_alias TEXT');
+    }
+    if (!columns.has('trigger_source')) {
+      db.exec('ALTER TABLE team_tasks ADD COLUMN trigger_source TEXT');
+    }
+    if (!columns.has('requested_by_message_id')) {
+      db.exec('ALTER TABLE team_tasks ADD COLUMN requested_by_message_id TEXT');
+    }
+    if (!columns.has('resume_count')) {
+      db.exec('ALTER TABLE team_tasks ADD COLUMN resume_count INTEGER NOT NULL DEFAULT 0');
+    }
+    console.log('[Migration v21] Added team task binding and recovery columns');
+  },
+  down: (_db) => {
+    console.warn('[Migration v21] Rollback skipped: cannot drop columns safely.');
+  },
+};
+
 /**
  * All migrations in order
  */
@@ -1274,7 +1301,7 @@ export const ALL_MIGRATIONS: IMigration[] = [
   migration_v1, migration_v2, migration_v3, migration_v4, migration_v5, migration_v6,
   migration_v7, migration_v8, migration_v9, migration_v10, migration_v11, migration_v12,
   migration_v13, migration_v14, migration_v15, migration_v16, migration_v17, migration_v18,
-  migration_v19, migration_v20,
+  migration_v19, migration_v20, migration_v21,
 ];
 
 /**

@@ -26,6 +26,7 @@
   "download": "Download",
   "close": "Close",
   "retry": "Retry",
+  "stop": "Stop",
   "reload": "Reload",
   "technical_details": "Technical Details",
   "error_details": "Error Details",

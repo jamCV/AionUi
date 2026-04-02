@@ -237,11 +237,19 @@
     },
     "taskStatus": {
       "queued": "待機中",
+      "bootstrapping": "初期化中",
       "running": "実行中",
       "waiting_user": "ユーザー待ち",
       "completed": "完了",
       "failed": "失敗",
+      "interrupted": "中断",
       "cancelled": "キャンセル済み"
+    },
+    "mention": {
+      "title": "アシスタントに委譲",
+      "hint": "↑/↓ と Enter で選択",
+      "empty": "利用可能なアシスタントがありません",
+      "badge": "{{assistant}} に委譲済み"
     },
     "sidebarStatus": {
       "pending": "保留",

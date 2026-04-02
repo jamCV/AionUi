@@ -237,11 +237,19 @@
     },
     "taskStatus": {
       "queued": "대기 중",
+      "bootstrapping": "초기화 중",
       "running": "진행 중",
       "waiting_user": "사용자 대기",
       "completed": "완료됨",
       "failed": "실패",
+      "interrupted": "중단됨",
       "cancelled": "취소됨"
+    },
+    "mention": {
+      "title": "어시스턴트에게 위임",
+      "hint": "↑/↓ 및 Enter로 선택",
+      "empty": "사용 가능한 어시스턴트가 없습니다",
+      "badge": "{{assistant}}에게 위임됨"
     },
     "sidebarStatus": {
       "pending": "대기",

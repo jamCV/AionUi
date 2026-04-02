@@ -237,11 +237,19 @@
     },
     "taskStatus": {
       "queued": "排队中",
+      "bootstrapping": "初始化中",
       "running": "进行中",
       "waiting_user": "等待用户",
       "completed": "已完成",
       "failed": "失败",
+      "interrupted": "已中断",
       "cancelled": "已取消"
+    },
+    "mention": {
+      "title": "委派给助手",
+      "hint": "使用 ↑/↓ 并按 Enter 选择",
+      "empty": "暂无可用助手",
+      "badge": "已委派给 {{assistant}}"
     },
     "sidebarStatus": {
       "pending": "待开始",

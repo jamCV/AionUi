@@ -4,11 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { TeamCommand } from './teamTypes';
+
 export type TeamTurnCompletionEvent = {
   conversationId: string;
   assistantMessageId?: string;
   completionSignal: 'finish' | 'error' | 'stop';
   completionSource?: string;
+  teamCommand?: TeamCommand;
 };
 
 type TeamTurnCompletionHandler = (event: TeamTurnCompletionEvent) => Promise<void>;

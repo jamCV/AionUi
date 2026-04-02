@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 type UseTeamRunViewResult = {
   childConversationByTaskId: Map<string, IConversationTeamChildConversation>;
+  refresh: () => Promise<void>;
   teamRunView?: IConversationTeamRunView;
 };
 
@@ -83,5 +84,6 @@ export const useTeamRunView = (conversationId: string): UseTeamRunViewResult => 
   return {
     teamRunView,
     childConversationByTaskId,
+    refresh: loadTeamRunView,
   };
 };

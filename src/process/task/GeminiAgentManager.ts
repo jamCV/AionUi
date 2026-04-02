@@ -32,6 +32,8 @@ import { stripThinkTags } from './ThinkTagDetector';
 import * as fs from 'node:fs';
 import { parseCompletionSource, turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
 import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
+import { TeamHiddenCommandCodec } from '@process/team/TeamHiddenCommandCodec';
+import type { TeamCommand } from '@process/team/teamTypes';
 
 // gemini agent管理器类
 type UiMcpServerConfig = {
@@ -104,6 +106,10 @@ export class GeminiAgentManager extends BaseAgentManager<
   /** Stored webSearchEngine for worker re-bootstrap / 保存 webSearchEngine 用于重建 worker */
   private webSearchEngine?: 'google' | 'default';
   private lastAssistantMessageId: string | undefined;
+  private readonly hiddenCommandCodec = new TeamHiddenCommandCodec();
+  private hiddenCommandRawBuffer = '';
+  private hiddenCommandVisibleLength = 0;
+  private latestTeamCommand: TeamCommand | undefined;
 
   constructor(
     data: {
@@ -640,7 +646,11 @@ export class GeminiAgentManager extends BaseAgentManager<
           assistantMessageId: this.lastAssistantMessageId,
           completionSignal: 'finish',
           completionSource,
+          teamCommand: this.latestTeamCommand,
         });
+        this.hiddenCommandRawBuffer = '';
+        this.hiddenCommandVisibleLength = 0;
+        this.latestTeamCommand = undefined;
       }
       if (data.type === 'start') {
         this.status = 'running';
@@ -668,13 +678,14 @@ export class GeminiAgentManager extends BaseAgentManager<
       }
 
       data.conversation_id = this.conversation_id;
+      const sanitizedData = this.sanitizeHiddenTeamCommandMessage(data as IResponseMessage);
       // Transform and persist message (skip transient UI state messages)
       // 跳过 thought, finished 等不需要持久化的消息类型
       // Skip transient UI state messages that don't need persistence
       // 跳过不需要持久化的临时 UI 状态消息 (thought, finished, start, finish)
       const skipTransformTypes = ['thought', 'finished', 'start', 'finish'];
       if (!skipTransformTypes.includes(data.type)) {
-        const tMessage = transformMessage(data as IResponseMessage);
+        const tMessage = transformMessage(sanitizedData as IResponseMessage);
         if (tMessage) {
           addOrUpdateMessage(this.conversation_id, tMessage, 'gemini');
           if (tMessage.type === 'text' && tMessage.position === 'left') {
@@ -688,13 +699,34 @@ export class GeminiAgentManager extends BaseAgentManager<
 
       // Filter think tags from streaming content before emitting to UI
       // 在发送到 UI 前过滤流式内容中的 think 标签
-      const filteredData = this.filterThinkTagsFromMessage(data);
+      const filteredData = this.filterThinkTagsFromMessage(sanitizedData);
       ipcBridge.geminiConversation.responseStream.emit(filteredData);
 
       // 发送到 Channel 全局事件总线（用于 Telegram 等外部平台）
       // Emit to Channel global event bus (for Telegram and other external platforms)
       channelEventBus.emitAgentMessage(this.conversation_id, filteredData);
     });
+  }
+
+  private sanitizeHiddenTeamCommandMessage(message: IResponseMessage): IResponseMessage {
+    if (message.type !== 'content' || typeof message.data !== 'string') {
+      return message;
+    }
+
+    this.hiddenCommandRawBuffer += message.data;
+    const extracted = this.hiddenCommandCodec.extractCommands(this.hiddenCommandRawBuffer);
+    if (extracted.length > 0) {
+      this.latestTeamCommand = extracted[extracted.length - 1];
+    }
+
+    const visibleContent = this.hiddenCommandCodec.stripIncrementally(this.hiddenCommandRawBuffer);
+    const delta = visibleContent.slice(this.hiddenCommandVisibleLength);
+    this.hiddenCommandVisibleLength = visibleContent.length;
+
+    return {
+      ...message,
+      data: delta,
+    };
   }
 
   /**

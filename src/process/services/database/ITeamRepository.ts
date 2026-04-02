@@ -5,12 +5,14 @@
  */
 
 import type {
+  PersistedAssistantBinding,
   TeamRunPhase,
   TeamRunRecord,
   TeamRunStatus,
   TeamSelectionMode,
   TeamTaskRecord,
   TeamTaskStatus,
+  TriggerSource,
 } from '@process/team/teamTypes';
 
 export type CreateTeamRunInput = {
@@ -38,6 +40,11 @@ export type CreateTeamTaskInput = {
   expectedOutput?: string;
   selectionMode: TeamSelectionMode;
   selectionReason?: string;
+  assistantBinding?: PersistedAssistantBinding;
+  displayAlias?: string;
+  triggerSource?: TriggerSource;
+  requestedByMessageId?: string;
+  resumeCount?: number;
   ownedPaths?: string[];
   lastError?: string;
   createdAt?: number;

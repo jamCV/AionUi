@@ -3,6 +3,8 @@ import type { TMessage } from '@/common/chat/chatLib';
 import { transformMessage } from '@/common/chat/chatLib';
 import { uuid } from '@/common/utils';
 import SendBox from '@/renderer/components/chat/sendbox';
+import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';
+import TeamDelegationBadge from '@/renderer/components/chat/TeamDelegationBadge';
 import { getSendBoxDraftHook, type FileOrFolderItem } from '@/renderer/hooks/chat/useSendBoxDraft';
 import { createSetUploadFile } from '@/renderer/hooks/chat/useSendBoxFiles';
 import { useAddOrUpdateMessage } from '@/renderer/pages/conversation/Messages/hooks';
@@ -23,6 +25,7 @@ import { useLatestRef } from '@/renderer/hooks/ui/useLatestRef';
 import { useOpenFileSelector } from '@/renderer/hooks/file/useOpenFileSelector';
 import FileAttachButton from '@/renderer/components/media/FileAttachButton';
 import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
+import { useTeamDelegationMention } from '@/renderer/pages/conversation/hooks/useTeamDelegationMention';
 import AgentModeSelector from '@/renderer/components/agent/AgentModeSelector';
 import AcpConfigSelector from '@/renderer/components/agent/AcpConfigSelector';
 import { useSlashCommands } from '@/renderer/hooks/chat/useSlashCommands';
@@ -136,6 +139,21 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
       mutateDraft((prev) => ({ ...(prev as CodexDraftData), content: val }));
     },
     [mutateDraft]
+  );
+  const teamDelegation = useTeamDelegationMention({
+    conversationId: conversation_id,
+    input: content,
+    setInput: setContent,
+  });
+  const mentionMenuItems = useMemo<SlashCommandMenuItem[]>(
+    () =>
+      teamDelegation.filteredAssistants.map((assistant) => ({
+        key: assistant.id,
+        label: `@${assistant.alias || assistant.name}`,
+        description: assistant.alias ? assistant.name : assistant.id,
+        badge: assistant.runtime,
+      })),
+    [teamDelegation.filteredAssistants]
   );
 
   // 使用 useLatestRef 保存最新的 setContent/atPath，避免重复注册 handler
@@ -292,6 +310,36 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
       ...currentAtPath.map((item) => (typeof item === 'string' ? item : item.path)),
     ];
     const displayMessage = buildDisplayMessage(message, filePaths, workspacePath);
+    const atPathStrings = currentAtPath.map((item) => (typeof item === 'string' ? item : item.path));
+
+    if (teamDelegation.selectedAssistant) {
+      const delegatedUserMessage: TMessage = {
+        id: msg_id,
+        msg_id,
+        conversation_id,
+        type: 'text',
+        position: 'right',
+        content: { content: displayMessage },
+        createdAt: Date.now(),
+      };
+      addOrUpdateMessage(delegatedUserMessage, true);
+      const result = await ipcBridge.conversation.team.delegateFromUser.invoke({
+        conversation_id,
+        msg_id,
+        input: displayMessage,
+        files: [...currentUploadFile, ...atPathStrings],
+        delegation: {
+          assistantId: teamDelegation.selectedAssistant.id,
+          displayAlias: teamDelegation.selectedAssistant.alias || teamDelegation.selectedAssistant.name,
+        },
+      });
+      if (!result.success) {
+        throw new Error(result.msg || 'Failed to delegate task');
+      }
+      teamDelegation.clearSelectedAssistant();
+      emitter.emit('chat.history.refresh');
+      return;
+    }
 
     // 前端先写入用户消息，避免导航/事件竞争导致看不到消息
     const userMessage: TMessage = {
@@ -307,7 +355,6 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
     setAiProcessing(true);
     try {
       // 提取实际的文件路径发送给后端
-      const atPathStrings = currentAtPath.map((item) => (typeof item === 'string' ? item : item.path));
       await ipcBridge.codexConversation.sendMessage.invoke({
         input: displayMessage,
         msg_id,
@@ -432,7 +479,24 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
 
       <SendBox
         value={content}
-        onChange={setContent}
+        onChange={teamDelegation.handleInputChange}
+        onInputKeyDownIntercept={teamDelegation.handleKeyDown}
+        floatingPanel={
+          teamDelegation.enabled && teamDelegation.menuOpen ? (
+            <SlashCommandMenu
+              title={t('conversation.team.mention.title')}
+              hint={t('conversation.team.mention.hint')}
+              items={mentionMenuItems}
+              activeIndex={teamDelegation.activeIndex}
+              loading={teamDelegation.loading}
+              onHoverItem={teamDelegation.setActiveIndex}
+              onSelectItem={(item) => {
+                teamDelegation.selectAssistantById(item.key);
+              }}
+              emptyText={t('conversation.team.mention.empty')}
+            />
+          ) : null
+        }
         loading={running || aiProcessing}
         disabled={false}
         className='z-10'
@@ -466,6 +530,12 @@ const CodexSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }
         }
         prefix={
           <>
+            {teamDelegation.selectedAssistant && (
+              <TeamDelegationBadge
+                assistantName={teamDelegation.selectedAssistant.alias || teamDelegation.selectedAssistant.name}
+                onClose={teamDelegation.clearSelectedAssistant}
+              />
+            )}
             {/* Files on top */}
             {(uploadFile.length > 0 || atPath.some((item) => (typeof item === 'string' ? true : item.isFile))) && (
               <HorizontalFileList>

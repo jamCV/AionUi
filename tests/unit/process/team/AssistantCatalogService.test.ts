@@ -149,4 +149,73 @@ describe('AssistantCatalogService', () => {
       },
     });
   });
+
+  it('does not treat assistant description as alias in the available list', async () => {
+    mockProcessConfigGet.mockImplementation(async (key: string) => {
+      if (key === 'acp.customAgents') {
+        return [
+          {
+            id: 'custom-1',
+            name: 'Long Task Assistant - Codex',
+            description: 'Handles complex multi-step tasks.',
+            presetAgentType: 'codex',
+            enabled: true,
+            isPreset: true,
+          } as AcpBackendConfig,
+        ];
+      }
+
+      if (key === 'language') {
+        return 'en-US';
+      }
+
+      return undefined;
+    });
+
+    const descriptors = await service.listAvailableAssistants(makeCodexConversation());
+
+    expect(descriptors).toEqual([
+      expect.objectContaining({
+        id: 'custom-1',
+        name: 'Long Task Assistant - Codex',
+        alias: undefined,
+        runtime: 'codex',
+      }),
+    ]);
+  });
+
+  it('preserves a real alias when the assistant config provides one', async () => {
+    mockProcessConfigGet.mockImplementation(async (key: string) => {
+      if (key === 'acp.customAgents') {
+        return [
+          {
+            id: 'custom-2',
+            name: 'Project Owner - Codex',
+            alias: 'owner',
+            description: 'Maintains the project knowledge base.',
+            presetAgentType: 'codex',
+            enabled: true,
+            isPreset: true,
+          } as AcpBackendConfig,
+        ];
+      }
+
+      if (key === 'language') {
+        return 'en-US';
+      }
+
+      return undefined;
+    });
+
+    const descriptors = await service.listAvailableAssistants(makeCodexConversation());
+
+    expect(descriptors).toEqual([
+      expect.objectContaining({
+        id: 'custom-2',
+        name: 'Project Owner - Codex',
+        alias: 'owner',
+        runtime: 'codex',
+      }),
+    ]);
+  });
 });

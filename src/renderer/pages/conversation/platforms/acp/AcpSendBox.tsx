@@ -1,7 +1,9 @@
 import { ipcBridge } from '@/common';
 import type { AcpBackend } from '@/common/types/acpTypes';
 import { uuid } from '@/common/utils';
+import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';
 import SendBox from '@/renderer/components/chat/sendbox';
+import TeamDelegationBadge from '@/renderer/components/chat/TeamDelegationBadge';
 import ThoughtDisplay from '@/renderer/components/chat/ThoughtDisplay';
 import { getSendBoxDraftHook, type FileOrFolderItem } from '@/renderer/hooks/chat/useSendBoxDraft';
 import { createSetUploadFile, useSendBoxFiles } from '@/renderer/hooks/chat/useSendBoxFiles';
@@ -19,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import FilePreview from '@/renderer/components/media/FilePreview';
 import HorizontalFileList from '@/renderer/components/media/HorizontalFileList';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
+import { useTeamDelegationMention } from '@/renderer/pages/conversation/hooks/useTeamDelegationMention';
 import { useLatestRef } from '@/renderer/hooks/ui/useLatestRef';
 import { useOpenFileSelector } from '@/renderer/hooks/file/useOpenFileSelector';
 import ContextUsageIndicator from '@/renderer/components/agent/ContextUsageIndicator';
@@ -83,6 +86,21 @@ const AcpSendBox: React.FC<{
   const { checkAndUpdateTitle } = useAutoTitle();
   const slashCommands = useSlashCommands(conversation_id, { agentStatus: acpStatus });
   const { atPath, uploadFile, setAtPath, setUploadFile, content, setContent } = useSendBoxDraft(conversation_id);
+  const teamDelegation = useTeamDelegationMention({
+    conversationId: conversation_id,
+    input: content,
+    setInput: setContent,
+  });
+  const mentionMenuItems = React.useMemo<SlashCommandMenuItem[]>(
+    () =>
+      teamDelegation.filteredAssistants.map((assistant) => ({
+        key: assistant.id,
+        label: `@${assistant.alias || assistant.name}`,
+        description: assistant.alias ? assistant.name : assistant.id,
+        badge: assistant.runtime,
+      })),
+    [teamDelegation.filteredAssistants]
+  );
   const { setSendBoxHandler } = usePreviewContext();
 
   // Use useLatestRef to keep latest setters to avoid re-registering handler
@@ -144,6 +162,28 @@ const AcpSendBox: React.FC<{
     clearFiles();
 
     // Start AI processing loading state
+    if (teamDelegation.selectedAssistant) {
+      const result = await ipcBridge.conversation.team.delegateFromUser.invoke({
+        conversation_id,
+        msg_id,
+        input: message,
+        files: allFiles,
+        delegation: {
+          assistantId: teamDelegation.selectedAssistant.id,
+          displayAlias: teamDelegation.selectedAssistant.alias || teamDelegation.selectedAssistant.name,
+        },
+      });
+      if (!result.success) {
+        throw new Error(result.msg || 'Failed to delegate task');
+      }
+      teamDelegation.clearSelectedAssistant();
+      emitter.emit('chat.history.refresh');
+      emitter.emit('acp.selected.file.clear');
+      if (allFiles.length) {
+        emitter.emit('acp.workspace.refresh');
+      }
+      return;
+    }
     setAiProcessing(true);
 
     // Send message via ACP
@@ -230,7 +270,24 @@ const AcpSendBox: React.FC<{
 
       <SendBox
         value={content}
-        onChange={setContent}
+        onChange={teamDelegation.handleInputChange}
+        onInputKeyDownIntercept={teamDelegation.handleKeyDown}
+        floatingPanel={
+          teamDelegation.enabled && teamDelegation.menuOpen ? (
+            <SlashCommandMenu
+              title={t('conversation.team.mention.title')}
+              hint={t('conversation.team.mention.hint')}
+              items={mentionMenuItems}
+              activeIndex={teamDelegation.activeIndex}
+              loading={teamDelegation.loading}
+              onHoverItem={teamDelegation.setActiveIndex}
+              onSelectItem={(item) => {
+                teamDelegation.selectAssistantById(item.key);
+              }}
+              emptyText={t('conversation.team.mention.empty')}
+            />
+          ) : null
+        }
         loading={running || aiProcessing}
         disabled={false}
         placeholder={t('acp.sendbox.placeholder', {
@@ -261,6 +318,12 @@ const AcpSendBox: React.FC<{
         }
         prefix={
           <>
+            {teamDelegation.selectedAssistant && (
+              <TeamDelegationBadge
+                assistantName={teamDelegation.selectedAssistant.alias || teamDelegation.selectedAssistant.name}
+                onClose={teamDelegation.clearSelectedAssistant}
+              />
+            )}
             {/* Files on top */}
             {(uploadFile.length > 0 || atPath.some((item) => (typeof item === 'string' ? true : item.isFile))) && (
               <HorizontalFileList>

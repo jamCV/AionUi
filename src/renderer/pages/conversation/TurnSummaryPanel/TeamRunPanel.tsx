@@ -1,7 +1,7 @@
 import { ipcBridge } from '@/common';
 import type { IConversationTeamRunStatus, IConversationTeamTaskStatus } from '@/common/adapter/ipcBridge';
 import type { TChatConversation } from '@/common/config/storage';
-import { Message, Button, Tag } from '@arco-design/web-react';
+import { Button, Message, Tag } from '@arco-design/web-react';
 import { Right, Down } from '@icon-park/react';
 import { iconColors } from '@renderer/styles/colors';
 import classNames from 'classnames';
@@ -42,6 +42,10 @@ const getTaskTone = (status: IConversationTeamTaskStatus): string => {
       return 'gray';
     case 'waiting_user':
       return 'orange';
+    case 'bootstrapping':
+      return 'purple';
+    case 'interrupted':
+      return 'red';
     case 'running':
       return 'arcoblue';
     case 'queued':
@@ -54,8 +58,36 @@ const TeamRunPanel: React.FC<TeamRunPanelProps> = ({ conversationId }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { activeTab, closeAllTabs, openTab } = useConversationTabs();
-  const { teamRunView, childConversationByTaskId } = useTeamRunView(conversationId);
+  const { teamRunView, childConversationByTaskId, refresh } = useTeamRunView(conversationId);
   const [expanded, setExpanded] = useState(false);
+  const [isSubagentConversation, setIsSubagentConversation] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!ipcBridge.conversation.get?.invoke) {
+      setIsSubagentConversation(false);
+      return () => {
+        disposed = true;
+      };
+    }
+    void ipcBridge.conversation.get
+      .invoke({ id: conversationId })
+      .then((conversation) => {
+        if (!conversation || disposed) {
+          return;
+        }
+        setIsSubagentConversation(conversation.extra?.team?.role === 'subagent');
+      })
+      .catch(() => {
+        if (!disposed) {
+          setIsSubagentConversation(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [conversationId]);
 
   useEffect(() => {
     if (!teamRunView) {
@@ -99,7 +131,53 @@ const TeamRunPanel: React.FC<TeamRunPanelProps> = ({ conversationId }) => {
     [activeTab?.workspace, closeAllTabs, navigate, openTab, t]
   );
 
-  if (!teamRunView) {
+  const handleTaskAction = useCallback(
+    async (action: 'stop' | 'retry' | 'cancel', taskId: string): Promise<void> => {
+      const handlers = {
+        stop: () => ipcBridge.conversation.team.stopTask.invoke({ conversation_id: conversationId, task_id: taskId }),
+        retry: () => ipcBridge.conversation.team.retryTask.invoke({ conversation_id: conversationId, task_id: taskId }),
+        cancel: () =>
+          ipcBridge.conversation.team.cancelTask.invoke({ conversation_id: conversationId, task_id: taskId }),
+      };
+
+      const result = await handlers[action]();
+      if (!result.success) {
+        Message.error(result.msg || t('conversation.team.openConversationFailed'));
+        return;
+      }
+      await refresh();
+    },
+    [conversationId, refresh, t]
+  );
+
+  const openRenameDialog = useCallback(
+    async (taskId: string, initialAlias?: string) => {
+      const nextAlias = window.prompt(t('conversation.history.renamePlaceholder'), initialAlias || '');
+      if (nextAlias === null) {
+        return;
+      }
+      const result = await ipcBridge.conversation.team.renameTaskAlias.invoke({
+        conversation_id: conversationId,
+        task_id: taskId,
+        display_alias: nextAlias.trim() || undefined,
+      });
+      if (!result.success) {
+        Message.error(result.msg || t('conversation.team.openConversationFailed'));
+        return;
+      }
+      await refresh();
+    },
+    [conversationId, refresh, t]
+  );
+
+  const canRename = useCallback((status: IConversationTeamTaskStatus): boolean => {
+    if (status === 'completed' || status === 'cancelled') {
+      return;
+    }
+    return true;
+  }, []);
+
+  if (isSubagentConversation || !teamRunView) {
     return null;
   }
 
@@ -177,17 +255,49 @@ const TeamRunPanel: React.FC<TeamRunPanelProps> = ({ conversationId }) => {
                           </div>
                         )}
                       </div>
-
-                      {targetConversationId && (
-                        <Button
-                          size='mini'
-                          type='secondary'
-                          icon={<Right theme='outline' size='14' fill={iconColors.secondary} />}
-                          onClick={() => void handleOpenConversation(targetConversationId)}
-                        >
-                          {t('conversation.team.openConversation')}
-                        </Button>
-                      )}
+                      <div className='flex flex-wrap items-center gap-4px'>
+                        {targetConversationId && (
+                          <Button
+                            size='mini'
+                            type='secondary'
+                            icon={<Right theme='outline' size='14' fill={iconColors.secondary} />}
+                            onClick={() => void handleOpenConversation(targetConversationId)}
+                          >
+                            {t('conversation.team.openConversation')}
+                          </Button>
+                        )}
+                        {task.status === 'running' && (
+                          <Button size='mini' type='secondary' onClick={() => void handleTaskAction('stop', task.id)}>
+                            {t('common.stop')}
+                          </Button>
+                        )}
+                        {(task.status === 'queued' ||
+                          task.status === 'bootstrapping' ||
+                          task.status === 'waiting_user') && (
+                          <Button
+                            size='mini'
+                            status='warning'
+                            type='secondary'
+                            onClick={() => void handleTaskAction('cancel', task.id)}
+                          >
+                            {t('common.cancel')}
+                          </Button>
+                        )}
+                        {(task.status === 'failed' || task.status === 'interrupted') && (
+                          <Button size='mini' type='secondary' onClick={() => void handleTaskAction('retry', task.id)}>
+                            {t('common.retry')}
+                          </Button>
+                        )}
+                        {canRename(task.status) && (
+                          <Button
+                            size='mini'
+                            type='secondary'
+                            onClick={() => void openRenameDialog(task.id, task.displayAlias)}
+                          >
+                            {t('conversation.history.rename')}
+                          </Button>
+                        )}
+                      </div>
                     </div>
 
                     {(summaryText || task.touchedFiles.length > 0) && (

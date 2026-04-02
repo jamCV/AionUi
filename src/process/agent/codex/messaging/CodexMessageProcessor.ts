@@ -15,12 +15,18 @@ import { processCronInMessage } from '@process/task/MessageMiddleware';
 import { cronBusyGuard } from '@process/services/cron/CronBusyGuard';
 import { ipcBridge } from '@/common';
 import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
+import { TeamHiddenCommandCodec } from '@process/team/TeamHiddenCommandCodec';
+import type { TeamCommand } from '@process/team/teamTypes';
 
 export class CodexMessageProcessor {
   private currentLoadingId: string | null = null;
   private deltaTimeout: NodeJS.Timeout | null = null;
   private reasoningMsgId: string | null = null;
   private currentReason: string = '';
+  private readonly hiddenCommandCodec = new TeamHiddenCommandCodec();
+  private hiddenCommandRawBuffer = '';
+  private hiddenCommandVisibleLength = 0;
+  private latestTeamCommand: TeamCommand | undefined;
 
   constructor(
     private conversation_id: string,
@@ -67,7 +73,11 @@ export class CodexMessageProcessor {
       assistantMessageId,
       completionSignal: 'finish',
       completionSource: 'task_complete',
+      teamCommand: this.latestTeamCommand,
     });
+    this.hiddenCommandRawBuffer = '';
+    this.hiddenCommandVisibleLength = 0;
+    this.latestTeamCommand = undefined;
   }
 
   handleReasoningMessage(
@@ -101,11 +111,20 @@ export class CodexMessageProcessor {
 
   processMessageDelta(msg: Extract<CodexEventMsg, { type: 'agent_message_delta' }>) {
     const rawDelta = msg.delta;
+    this.hiddenCommandRawBuffer += rawDelta;
+    const extracted = this.hiddenCommandCodec.extractCommands(this.hiddenCommandRawBuffer);
+    if (extracted.length > 0) {
+      this.latestTeamCommand = extracted[extracted.length - 1];
+    }
+    const visibleContent = this.hiddenCommandCodec.stripIncrementally(this.hiddenCommandRawBuffer);
+    const delta = visibleContent.slice(this.hiddenCommandVisibleLength);
+    this.hiddenCommandVisibleLength = visibleContent.length;
+
     const deltaMessage = {
       type: 'content' as const,
       conversation_id: this.conversation_id,
       msg_id: this.currentLoadingId,
-      data: rawDelta,
+      data: delta,
     };
     // Delta messages: only emit to frontend for streaming display, do NOT persist
     // Frontend will accumulate deltas in memory for real-time UI updates
@@ -113,6 +132,12 @@ export class CodexMessageProcessor {
   }
 
   processFinalMessage(msg: Extract<CodexEventMsg, { type: 'agent_message' }>) {
+    this.hiddenCommandRawBuffer = msg.message || '';
+    const extracted = this.hiddenCommandCodec.extractCommands(this.hiddenCommandRawBuffer);
+    if (extracted.length > 0) {
+      this.latestTeamCommand = extracted[extracted.length - 1];
+    }
+    const visibleMessage = this.hiddenCommandCodec.stripCommands(this.hiddenCommandRawBuffer);
     // Final message: only persist to database, do NOT emit to frontend
     // Frontend has already shown the content via deltas
 
@@ -122,7 +147,7 @@ export class CodexMessageProcessor {
       type: 'text' as const,
       position: 'left' as const,
       conversation_id: this.conversation_id,
-      content: { content: msg.message },
+      content: { content: visibleMessage },
       status: 'finish', // Mark as finished for cron detection
       createdAt: Date.now(),
     };
@@ -132,7 +157,7 @@ export class CodexMessageProcessor {
 
     // Process cron commands in final message
     // This is the reliable point to detect cron commands since we have the complete message text
-    const messageText = msg.message || '';
+    const messageText = visibleMessage || '';
 
     if (hasCronCommands(messageText)) {
       // Collect system responses to send back to AI

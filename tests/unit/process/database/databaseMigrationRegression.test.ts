@@ -18,6 +18,7 @@ import type {
 } from '../../../../src/process/services/database/types';
 import type { IStatement, ISqliteDriver } from '../../../../src/process/services/database/drivers/ISqliteDriver';
 import { DatabaseMigrationError } from '../../../../src/process/services/database/migrations';
+import { CURRENT_DB_VERSION } from '../../../../src/process/services/database/schema';
 
 const { createDriverMock } = vi.hoisted(() => ({
   createDriverMock: vi.fn<(_: string) => Promise<ISqliteDriver>>(),
@@ -879,7 +880,7 @@ describe('database migration regression', () => {
     const messages = database.getConversationMessages('conversation-1', 0, 10);
     const createTurnResult = database.createTurnSnapshot(makeLiveTurnSnapshot());
 
-    expect(driver.getUserVersion()).toBe(20);
+    expect(driver.getUserVersion()).toBe(CURRENT_DB_VERSION);
     expect(driver.indexes.has('idx_turn_files_turn_path')).toBe(true);
     expect(conversations.data).toHaveLength(1);
     expect(conversations.data[0]?.id).toBe('conversation-1');
@@ -915,7 +916,7 @@ describe('database migration regression', () => {
     );
   });
 
-  it('adds team tables and indexes when migrating from v19 to v20', async () => {
+  it('adds team tables and indexes when migrating from v19 to current version', async () => {
     const { dbPath } = createTempDatabaseHandle();
     const driver = new MigrationRegressionDriver();
     driver.seedHistoricalConversation();
@@ -923,7 +924,7 @@ describe('database migration regression', () => {
 
     await AionUIDatabase.create(dbPath);
 
-    expect(driver.getUserVersion()).toBe(20);
+    expect(driver.getUserVersion()).toBe(CURRENT_DB_VERSION);
     expect(driver.tables.has('team_runs')).toBe(true);
     expect(driver.tables.has('team_tasks')).toBe(true);
     expect(driver.indexes.has('idx_team_runs_main')).toBe(true);
@@ -955,7 +956,7 @@ describe('database migration regression', () => {
           String(message).includes('Initialization failed during migration; existing database was preserved') &&
           error instanceof DatabaseMigrationError &&
           error.fromVersion === 18 &&
-          error.toVersion === 20 &&
+          error.toVersion === CURRENT_DB_VERSION &&
           error.failedVersion === 19
       )
     ).toBe(true);

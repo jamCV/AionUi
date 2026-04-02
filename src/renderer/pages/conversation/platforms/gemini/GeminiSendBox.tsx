@@ -4,6 +4,8 @@ import AgentSetupCard from '@/renderer/components/agent/AgentSetupCard';
 import ContextUsageIndicator from '@/renderer/components/agent/ContextUsageIndicator';
 import FilePreview from '@/renderer/components/media/FilePreview';
 import HorizontalFileList from '@/renderer/components/media/HorizontalFileList';
+import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';
+import TeamDelegationBadge from '@/renderer/components/chat/TeamDelegationBadge';
 import SendBox from '@/renderer/components/chat/sendbox';
 import { useAgentReadinessCheck } from '@/renderer/hooks/agent/useAgentReadinessCheck';
 import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
@@ -15,6 +17,7 @@ import { createSetUploadFile, useSendBoxFiles } from '@/renderer/hooks/chat/useS
 import { useSlashCommands } from '@/renderer/hooks/chat/useSlashCommands';
 import { useAddOrUpdateMessage } from '@/renderer/pages/conversation/Messages/hooks';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
+import { useTeamDelegationMention } from '@/renderer/pages/conversation/hooks/useTeamDelegationMention';
 import { allSupportedExts } from '@/renderer/services/FileService';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { mergeFileSelectionItems } from '@/renderer/utils/file/fileSelection';
@@ -124,6 +127,21 @@ const GeminiSendBox: React.FC<{
   );
 
   const { atPath, uploadFile, setAtPath, setUploadFile, content, setContent } = useSendBoxDraft(conversation_id);
+  const teamDelegation = useTeamDelegationMention({
+    conversationId: conversation_id,
+    input: content,
+    setInput: setContent,
+  });
+  const mentionMenuItems = React.useMemo<SlashCommandMenuItem[]>(
+    () =>
+      teamDelegation.filteredAssistants.map((assistant) => ({
+        key: assistant.id,
+        label: `@${assistant.alias || assistant.name}`,
+        description: assistant.alias ? assistant.name : assistant.id,
+        badge: assistant.runtime,
+      })),
+    [teamDelegation.filteredAssistants]
+  );
 
   useGeminiInitialMessage({
     conversationId: conversation_id,
@@ -208,9 +226,6 @@ const GeminiSendBox: React.FC<{
     if (!currentModel?.useModel) return;
 
     const msg_id = uuid();
-    // Set current active message ID to filter out events from old requests
-    setActiveMsgId(msg_id);
-    setWaitingResponse(true);
 
     // Save file list before clearing
     const filesToSend = collectSelectedFiles(uploadFile, atPath);
@@ -235,6 +250,33 @@ const GeminiSendBox: React.FC<{
       },
       true
     );
+    if (teamDelegation.selectedAssistant) {
+      const result = await ipcBridge.conversation.team.delegateFromUser.invoke({
+        conversation_id,
+        msg_id,
+        input: displayMessage,
+        files: filesToSend,
+        delegation: {
+          assistantId: teamDelegation.selectedAssistant.id,
+          displayAlias: teamDelegation.selectedAssistant.alias || teamDelegation.selectedAssistant.name,
+        },
+      });
+      if (!result.success) {
+        throw new Error(result.msg || 'Failed to delegate task');
+      }
+      teamDelegation.clearSelectedAssistant();
+      emitter.emit('chat.history.refresh');
+      emitter.emit('gemini.selected.file.clear');
+      if (hasFiles) {
+        emitter.emit('gemini.workspace.refresh');
+      }
+      return;
+    }
+
+    // Set current active message ID to filter out events from old requests
+    setActiveMsgId(msg_id);
+    setWaitingResponse(true);
+
     // Files are passed via files param, no longer adding @ prefix in message
     await ipcBridge.geminiConversation.sendMessage.invoke({
       input: displayMessage,
@@ -302,7 +344,24 @@ const GeminiSendBox: React.FC<{
 
       <SendBox
         value={content}
-        onChange={setContent}
+        onChange={teamDelegation.handleInputChange}
+        onInputKeyDownIntercept={teamDelegation.handleKeyDown}
+        floatingPanel={
+          teamDelegation.enabled && teamDelegation.menuOpen ? (
+            <SlashCommandMenu
+              title={t('conversation.team.mention.title')}
+              hint={t('conversation.team.mention.hint')}
+              items={mentionMenuItems}
+              activeIndex={teamDelegation.activeIndex}
+              loading={teamDelegation.loading}
+              onHoverItem={teamDelegation.setActiveIndex}
+              onSelectItem={(item) => {
+                teamDelegation.selectAssistantById(item.key);
+              }}
+              emptyText={t('conversation.team.mention.empty')}
+            />
+          ) : null
+        }
         loading={running}
         disabled={!currentModel?.useModel}
         placeholder={
@@ -339,6 +398,12 @@ const GeminiSendBox: React.FC<{
         }
         prefix={
           <>
+            {teamDelegation.selectedAssistant && (
+              <TeamDelegationBadge
+                assistantName={teamDelegation.selectedAssistant.alias || teamDelegation.selectedAssistant.name}
+                onClose={teamDelegation.clearSelectedAssistant}
+              />
+            )}
             {/* Files on top */}
             {(uploadFile.length > 0 || atPath.some((item) => (typeof item === 'string' ? true : item.isFile))) && (
               <HorizontalFileList>

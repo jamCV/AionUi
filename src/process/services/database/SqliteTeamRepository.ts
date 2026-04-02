@@ -68,7 +68,7 @@ export class SqliteTeamRepository implements ITeamRepository {
 
   async createTeamTask(input: CreateTeamTaskInput): Promise<TeamTaskRecord> {
     const db = await this.getDb();
-    const result = db.createTeamTask({
+    const payload: Record<string, unknown> = {
       id: input.id,
       runId: input.runId,
       parentConversationId: input.parentConversationId,
@@ -85,7 +85,24 @@ export class SqliteTeamRepository implements ITeamRepository {
       lastError: input.lastError,
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
-    });
+    };
+    if (input.assistantBinding !== undefined) {
+      payload.assistantBinding = input.assistantBinding;
+    }
+    if (input.displayAlias !== undefined) {
+      payload.displayAlias = input.displayAlias;
+    }
+    if (input.triggerSource !== undefined) {
+      payload.triggerSource = input.triggerSource;
+    }
+    if (input.requestedByMessageId !== undefined) {
+      payload.requestedByMessageId = input.requestedByMessageId;
+    }
+    if (input.resumeCount !== undefined) {
+      payload.resumeCount = input.resumeCount;
+    }
+
+    const result = db.createTeamTask(payload as Parameters<typeof db.createTeamTask>[0]);
 
     if (!result.success || !result.data) {
       throw new Error(result.error ?? 'Failed to create team task');
@@ -115,6 +132,11 @@ export class SqliteTeamRepository implements ITeamRepository {
       expectedOutput: patch.expectedOutput,
       selectionMode: patch.selectionMode,
       selectionReason: patch.selectionReason,
+      assistantBinding: patch.assistantBinding,
+      displayAlias: patch.displayAlias,
+      triggerSource: patch.triggerSource,
+      requestedByMessageId: patch.requestedByMessageId,
+      resumeCount: patch.resumeCount,
       ownedPaths: patch.ownedPaths,
       lastError: patch.lastError,
       updatedAt: patch.updatedAt,

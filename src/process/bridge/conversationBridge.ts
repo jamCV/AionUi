@@ -176,6 +176,74 @@ export function initConversationBridge(
     return teamOrchestratorService.listChildConversations(conversation_id);
   });
 
+  // Guard optional channels in unit-test mocks that may lag behind IPC additions.
+  ipcBridge.conversation.team.listAvailableAssistants?.provider(async ({ conversation_id }) => {
+    return teamOrchestratorService.listAvailableAssistants(conversation_id);
+  });
+
+  ipcBridge.conversation.team.delegateFromUser?.provider(async (params) => {
+    try {
+      const result = await teamOrchestratorService.delegateFromUser(params);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        msg: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcBridge.conversation.team.stopTask?.provider(async ({ conversation_id, task_id }) => {
+    try {
+      await teamOrchestratorService.stopTask(conversation_id, task_id);
+      return { success: true, data: { taskId: task_id } };
+    } catch (error) {
+      return {
+        success: false,
+        msg: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcBridge.conversation.team.retryTask?.provider(async ({ conversation_id, task_id }) => {
+    try {
+      await teamOrchestratorService.retryTask(conversation_id, task_id);
+      return { success: true, data: { taskId: task_id } };
+    } catch (error) {
+      return {
+        success: false,
+        msg: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcBridge.conversation.team.cancelTask?.provider(async ({ conversation_id, task_id }) => {
+    try {
+      await teamOrchestratorService.cancelTask(conversation_id, task_id);
+      return { success: true, data: { taskId: task_id } };
+    } catch (error) {
+      return {
+        success: false,
+        msg: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcBridge.conversation.team.renameTaskAlias?.provider(async ({ conversation_id, task_id, display_alias }) => {
+    try {
+      await teamOrchestratorService.renameTaskAlias(conversation_id, task_id, display_alias);
+      return { success: true, data: { taskId: task_id, displayAlias: display_alias } };
+    } catch (error) {
+      return {
+        success: false,
+        msg: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   ipcBridge.conversation.getAssociateConversation.provider(async ({ conversation_id }) => {
     try {
       // Try to get current conversation via service

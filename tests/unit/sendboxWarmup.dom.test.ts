@@ -266,4 +266,19 @@ describe('SendBox warmup debounce logic', () => {
     expect(mockWarmupInvoke).toHaveBeenNthCalledWith(1, { conversation_id: 'test-conv-1' });
     expect(mockWarmupInvoke).toHaveBeenNthCalledWith(2, { conversation_id: 'test-conv-2' });
   });
+
+  it('keeps overflow visible when a custom floating panel is provided', () => {
+    const { container, getByTestId } = render(
+      React.createElement(SendBox, {
+        onSend: vi.fn().mockResolvedValue(undefined),
+        floatingPanel: React.createElement('div', { 'data-testid': 'team-floating-panel' }, 'panel'),
+      })
+    );
+
+    expect(getByTestId('team-floating-panel')).toBeTruthy();
+
+    const sendboxContainer = container.querySelector('.overflow-visible');
+    expect(sendboxContainer).toBeTruthy();
+    expect(sendboxContainer?.className).not.toContain('overflow-hidden');
+  });
 });

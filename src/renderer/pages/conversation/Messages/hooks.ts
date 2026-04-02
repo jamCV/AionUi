@@ -81,7 +81,7 @@ const createConversationMessagesEntry = (): ConversationMessagesEntry => ({
 });
 
 const getLoadedPagesWithPage = (loadedPages: number[], page: number): number[] => {
-  return Array.from(new Set([...loadedPages, page])).sort((a, b) => a - b);
+  return Array.from(new Set([...loadedPages, page])).toSorted((a, b) => a - b);
 };
 
 const ensureConversationMessagesEntry = (conversationId: string): ConversationMessagesEntry => {
@@ -135,7 +135,7 @@ function pruneConversationMessagesStore(activeConversationId?: string) {
       }
       return true;
     })
-    .sort(([, left], [, right]) => left.lastAccessedAt - right.lastAccessedAt);
+    .toSorted(([, left], [, right]) => left.lastAccessedAt - right.lastAccessedAt);
 
   while (conversationMessagesStore.size > MAX_RETAINED_CONVERSATIONS && removableEntries.length > 0) {
     const removable = removableEntries.shift();

@@ -7,11 +7,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CreateConversationParams } from '@process/services/IConversationService';
+import { ExtensionRegistry } from '@process/extensions';
 import { getAssistantsDir, ProcessConfig } from '@process/utils/initStorage';
 import type { TChatConversation, TProviderWithModel } from '@/common/config/storage';
-import type { AcpBackendConfig, AcpBackendAll } from '@/common/types/acpTypes';
+import type { AcpBackendAll, AcpBackendConfig } from '@/common/types/acpTypes';
 import { resolveLocaleKey } from '@/common/utils';
-import type { TeamCommand, TeamSelectionMode } from './teamTypes';
+import type { AssistanceDescriptor, PersistedAssistantBinding, TeamCommand, TeamSelectionMode } from './teamTypes';
+import { isSupportedTeamAssistant, isSupportedTeamConversation } from './teamTypes';
 
 type DelegateTeamCommand = Extract<TeamCommand, { action: 'delegate' }>;
 
@@ -21,6 +23,7 @@ export type TeamAssistantSelection = {
   selectionMode: TeamSelectionMode;
   selectionReason: string;
   createConversationParams: CreateConversationParams;
+  binding: PersistedAssistantBinding;
 };
 
 const ASSISTANT_RULE_LOCALE_FALLBACKS = ['en-US', 'zh-CN'];
@@ -40,6 +43,14 @@ const normalizeIdCandidates = (value: string | undefined): string[] => {
   return [...new Set([trimmed, withoutBuiltinPrefix, withBuiltinPrefix])];
 };
 
+const normalizeText = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+};
+
 const buildGeminiPlaceholderModel = (): TProviderWithModel => ({
   id: 'gemini-placeholder',
   name: 'Gemini',
@@ -49,304 +60,407 @@ const buildGeminiPlaceholderModel = (): TProviderWithModel => ({
   apiKey: '',
 });
 
+type ExtensionAssistant = Record<string, unknown> & {
+  id?: string;
+  name?: string;
+  presetAgentType?: string;
+  enabledSkills?: string[];
+  context?: string;
+  enabled?: boolean;
+};
+
 export class AssistantCatalogService {
+  async listAvailableAssistants(mainConversation: TChatConversation): Promise<AssistanceDescriptor[]> {
+    if (!isSupportedTeamConversation(mainConversation)) {
+      return [];
+    }
+
+    const all = await this.listAllEnabledAssistances();
+    const normalized = all
+      .map((item) => this.normalizeToDescriptor(item))
+      .filter((item): item is AssistanceDescriptor => !!item)
+      .filter((item) => this.filterSupportedTeamAssistances(item));
+
+    return normalized.toSorted((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async findByIdOrAlias(mainConversation: TChatConversation, token: string): Promise<AssistanceDescriptor | undefined> {
+    const tokenCandidates = normalizeIdCandidates(token.toLowerCase());
+    if (tokenCandidates.length === 0) {
+      return undefined;
+    }
+
+    const descriptors = await this.listAvailableAssistants(mainConversation);
+    return descriptors.find((descriptor) => {
+      const ids = normalizeIdCandidates(descriptor.id.toLowerCase());
+      const aliasCandidates = normalizeIdCandidates((descriptor.alias || '').toLowerCase());
+      const names = normalizeIdCandidates(descriptor.name.toLowerCase().replace(/\s+/g, '-'));
+      const all = new Set([...ids, ...aliasCandidates, ...names]);
+      return tokenCandidates.some((candidate) => all.has(candidate));
+    });
+  }
+
+  async recommendForCommand(
+    mainConversation: TChatConversation,
+    command: DelegateTeamCommand
+  ): Promise<AssistanceDescriptor | undefined> {
+    const descriptors = await this.listAvailableAssistants(mainConversation);
+    if (descriptors.length === 0) {
+      return undefined;
+    }
+
+    const explicit = await this.findByIdOrAlias(mainConversation, command.recommendedAssistantId || '');
+    if (explicit) {
+      return explicit;
+    }
+
+    for (const candidateId of command.candidateAssistantIds ?? []) {
+      const matched = await this.findByIdOrAlias(mainConversation, candidateId);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    const haystack = `${command.title}\n${command.taskPrompt}`.toLowerCase();
+    let bestMatch: AssistanceDescriptor | undefined;
+    let bestScore = 0;
+    for (const descriptor of descriptors) {
+      const tokens = [descriptor.id, descriptor.alias, descriptor.name]
+        .map((item) => item?.toLowerCase().trim())
+        .filter((item): item is string => !!item && item.length >= 2);
+
+      const score = tokens.reduce((total, token) => {
+        return haystack.includes(token) ? total + token.length : total;
+      }, 0);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = descriptor;
+      }
+    }
+
+    return bestMatch;
+  }
+
   async selectAssistant(
     mainConversation: TChatConversation,
     command: DelegateTeamCommand
   ): Promise<TeamAssistantSelection> {
-    const presetAssistants = await this.listCompatiblePresetAssistants(mainConversation);
-
-    const explicitlyRecommended = this.matchByAssistantId(presetAssistants, command.recommendedAssistantId);
-    if (explicitlyRecommended) {
-      return this.buildPresetSelection(mainConversation, explicitlyRecommended, 'recommendedAssistantId matched');
-    }
-
-    const candidateMatch = (command.candidateAssistantIds ?? [])
-      .map((assistantId) => this.matchByAssistantId(presetAssistants, assistantId))
-      .find((assistant): assistant is AcpBackendConfig => !!assistant);
-    if (candidateMatch) {
-      return this.buildPresetSelection(mainConversation, candidateMatch, 'candidateAssistantIds matched');
-    }
-
-    const keywordMatch = this.matchByKeyword(presetAssistants, command);
-    if (keywordMatch) {
-      return this.buildPresetSelection(mainConversation, keywordMatch, 'keyword match');
+    const recommended = await this.recommendForCommand(mainConversation, command);
+    if (recommended) {
+      return this.buildSelectionFromDescriptor(mainConversation, recommended, 'recommended');
     }
 
     return this.buildFallbackSelection(mainConversation);
   }
 
-  private async buildPresetSelection(
+  async selectionFromExplicitAssistant(
     mainConversation: TChatConversation,
-    assistant: AcpBackendConfig,
-    selectionReason: string
+    assistantId: string
   ): Promise<TeamAssistantSelection> {
-    const locale = resolveLocaleKey((await ProcessConfig.get('language')) || 'en-US');
-    const fallbackRules = typeof assistant.context === 'string' ? assistant.context : undefined;
-    const presetRules = await this.readAssistantRules(assistant.id, locale, fallbackRules);
-    const sessionMode = this.getExtraString(mainConversation, 'sessionMode');
-    const workspace = this.getWorkspace(mainConversation);
-
-    const runtimeKey = this.getRuntimeKey(mainConversation);
-    if (runtimeKey === 'gemini') {
-      return {
-        assistantId: assistant.id,
-        assistantName: assistant.name,
-        selectionMode: 'recommended',
-        selectionReason,
-        createConversationParams: {
-          type: 'gemini',
-          model: this.getGeminiModel(mainConversation),
-          name: assistant.name,
-          extra: {
-            workspace,
-            customWorkspace: true,
-            webSearchEngine: this.getExtraString(mainConversation, 'webSearchEngine') as
-              | 'google'
-              | 'default'
-              | undefined,
-            contextFileName: this.getExtraString(mainConversation, 'contextFileName'),
-            presetRules,
-            enabledSkills: assistant.enabledSkills,
-            presetAssistantId: assistant.id,
-            sessionMode,
-          },
-        },
-      };
+    const descriptor = await this.findByIdOrAlias(mainConversation, assistantId);
+    if (!descriptor) {
+      throw new Error(`Assistant not found or unsupported: ${assistantId}`);
     }
 
+    return this.buildSelectionFromDescriptor(mainConversation, descriptor, 'manual');
+  }
+
+  private async listAllEnabledAssistances(): Promise<Array<AcpBackendConfig | ExtensionAssistant>> {
+    const configuredAssistants = ((await ProcessConfig.get('acp.customAgents')) || []) as AcpBackendConfig[];
+    const extensionAssistants = ExtensionRegistry.getInstance().getAssistants() as ExtensionAssistant[];
+
+    const enabledConfigured = configuredAssistants.filter((assistant) => assistant.enabled !== false);
+    const enabledExtensions = extensionAssistants.filter((assistant) => assistant.enabled !== false);
+    return [...enabledConfigured, ...enabledExtensions];
+  }
+
+  private normalizeToDescriptor(item: AcpBackendConfig | ExtensionAssistant): AssistanceDescriptor | undefined {
+    const id = normalizeText(item.id);
+    const name = normalizeText(item.name);
+    if (!id || !name) {
+      return undefined;
+    }
+
+    const rawRuntime = normalizeText((item as { presetAgentType?: string }).presetAgentType) || 'claude';
+    const runtime = this.toSupportedRuntime(rawRuntime);
+    if (!runtime) {
+      return undefined;
+    }
+
+    const source = this.detectSource(item);
     return {
-      assistantId: assistant.id,
-      assistantName: assistant.name,
-      selectionMode: 'recommended',
-      selectionReason,
-      createConversationParams: {
-        type: 'acp',
-        model: {} as TProviderWithModel,
-        name: assistant.name,
+      id,
+      name,
+      alias: normalizeText((item as { alias?: string }).alias),
+      runtime,
+      backend: runtime === 'acp' ? rawRuntime : runtime,
+      presetAssistantId: source !== 'custom' ? id : undefined,
+      customAgentId: source === 'custom' ? id : undefined,
+      enabledSkills: Array.isArray((item as { enabledSkills?: unknown[] }).enabledSkills)
+        ? ((item as { enabledSkills: unknown[] }).enabledSkills.filter(
+            (value): value is string => typeof value === 'string'
+          ) as string[])
+        : undefined,
+      presetRules: normalizeText((item as { context?: string }).context),
+      source,
+    };
+  }
+
+  private filterSupportedTeamAssistances(descriptor: AssistanceDescriptor): boolean {
+    return isSupportedTeamAssistant(descriptor);
+  }
+
+  private toSupportedRuntime(runtime: string): AssistanceDescriptor['runtime'] | undefined {
+    const normalized = runtime.trim().toLowerCase();
+    if (normalized === 'gemini') {
+      return 'gemini';
+    }
+    if (normalized === 'codex') {
+      return 'codex';
+    }
+    if (!normalized || normalized === 'acp' || normalized === 'claude' || normalized === 'custom') {
+      return 'acp';
+    }
+    if (
+      [
+        'qwen',
+        'iflow',
+        'codebuddy',
+        'droid',
+        'goose',
+        'auggie',
+        'kimi',
+        'opencode',
+        'copilot',
+        'qoder',
+        'vibe',
+        'cursor',
+      ].includes(normalized)
+    ) {
+      return 'acp';
+    }
+    return undefined;
+  }
+
+  private detectSource(item: AcpBackendConfig | ExtensionAssistant): AssistanceDescriptor['source'] {
+    const source = normalizeText((item as { _source?: string })._source);
+    if (source === 'extension') {
+      return 'extension';
+    }
+    const isPreset = Boolean((item as { isPreset?: boolean }).isPreset);
+    if (!isPreset) {
+      return 'custom';
+    }
+    return 'preset';
+  }
+
+  private async buildSelectionFromDescriptor(
+    mainConversation: TChatConversation,
+    descriptor: AssistanceDescriptor,
+    selectionMode: TeamSelectionMode
+  ): Promise<TeamAssistantSelection> {
+    const workspace = this.getWorkspace(mainConversation);
+    const sessionMode = this.getExtraString(mainConversation, 'sessionMode');
+    const presetRules = await this.readDescriptorRules(descriptor);
+    const selectionReason = selectionMode === 'recommended' ? 'recommendedAssistantId matched' : 'selected assistant';
+
+    if (descriptor.runtime === 'gemini') {
+      const createConversationParams: CreateConversationParams = {
+        type: 'gemini',
+        model: this.getGeminiModel(mainConversation),
+        name: descriptor.name,
         extra: {
           workspace,
           customWorkspace: true,
-          backend: runtimeKey as AcpBackendAll,
-          presetContext: presetRules,
-          enabledSkills: assistant.enabledSkills,
-          presetAssistantId: assistant.id,
+          webSearchEngine: this.getExtraString(mainConversation, 'webSearchEngine') as 'google' | 'default' | undefined,
+          contextFileName: this.getExtraString(mainConversation, 'contextFileName'),
+          presetRules,
+          enabledSkills: descriptor.enabledSkills,
+          presetAssistantId: descriptor.presetAssistantId,
           sessionMode,
-          currentModelId: this.getExtraString(mainConversation, 'currentModelId'),
         },
+      };
+
+      return {
+        assistantId: descriptor.id,
+        assistantName: descriptor.name,
+        selectionMode,
+        selectionReason,
+        createConversationParams,
+        binding: this.toBinding(descriptor, createConversationParams),
+      };
+    }
+
+    if (descriptor.runtime === 'codex') {
+      const createConversationParams: CreateConversationParams = {
+        type: 'codex',
+        model: {} as TProviderWithModel,
+        name: descriptor.name,
+        extra: {
+          workspace,
+          customWorkspace: true,
+          presetContext: presetRules,
+          enabledSkills: descriptor.enabledSkills,
+          presetAssistantId: descriptor.presetAssistantId,
+          sessionMode,
+          codexModel: this.getExtraString(mainConversation, 'codexModel'),
+          cliPath: this.getExtraString(mainConversation, 'cliPath'),
+        },
+      };
+
+      return {
+        assistantId: descriptor.id,
+        assistantName: descriptor.name,
+        selectionMode,
+        selectionReason,
+        createConversationParams,
+        binding: this.toBinding(descriptor, createConversationParams),
+      };
+    }
+
+    const backend = (descriptor.backend || 'claude') as AcpBackendAll;
+    const createConversationParams: CreateConversationParams = {
+      type: 'acp',
+      model: {} as TProviderWithModel,
+      name: descriptor.name,
+      extra: {
+        workspace,
+        customWorkspace: true,
+        backend,
+        presetContext: presetRules,
+        enabledSkills: descriptor.enabledSkills,
+        presetAssistantId: descriptor.presetAssistantId,
+        customAgentId: descriptor.customAgentId,
+        sessionMode,
+        currentModelId: this.getExtraString(mainConversation, 'currentModelId'),
       },
+    };
+
+    return {
+      assistantId: descriptor.id,
+      assistantName: descriptor.name,
+      selectionMode,
+      selectionReason,
+      createConversationParams,
+      binding: this.toBinding(descriptor, createConversationParams),
     };
   }
 
   private async buildFallbackSelection(mainConversation: TChatConversation): Promise<TeamAssistantSelection> {
-    const type = mainConversation.type;
     const workspace = this.getWorkspace(mainConversation);
+    const sessionMode = this.getExtraString(mainConversation, 'sessionMode');
 
-    if (type === 'gemini') {
+    if (mainConversation.type === 'gemini') {
+      const createConversationParams: CreateConversationParams = {
+        type: 'gemini',
+        model: this.getGeminiModel(mainConversation),
+        name: mainConversation.model.name || 'Gemini',
+        extra: {
+          workspace,
+          customWorkspace: true,
+          webSearchEngine: mainConversation.extra.webSearchEngine,
+          sessionMode,
+        },
+      };
+
+      const descriptor: AssistanceDescriptor = {
+        id: 'fallback-gemini',
+        name: mainConversation.model.name || 'Gemini',
+        runtime: 'gemini',
+        source: 'fallback',
+      };
       return {
-        assistantName: mainConversation.model.name || 'Gemini',
+        assistantName: descriptor.name,
         selectionMode: 'fallback',
         selectionReason: 'current runtime default agent',
-        createConversationParams: {
-          type: 'gemini',
-          model: this.getGeminiModel(mainConversation),
-          name: mainConversation.model.name || 'Gemini',
-          extra: {
-            workspace,
-            customWorkspace: true,
-            webSearchEngine: mainConversation.extra.webSearchEngine,
-            sessionMode: mainConversation.extra.sessionMode,
-          },
-        },
+        createConversationParams,
+        binding: this.toBinding(descriptor, createConversationParams),
       };
     }
 
-    if (type === 'acp') {
+    if (mainConversation.type === 'codex') {
+      const createConversationParams: CreateConversationParams = {
+        type: 'codex',
+        model: {} as TProviderWithModel,
+        name: 'Codex',
+        extra: {
+          workspace,
+          customWorkspace: true,
+          cliPath: this.getExtraString(mainConversation, 'cliPath'),
+          sessionMode,
+          codexModel: this.getExtraString(mainConversation, 'codexModel'),
+        },
+      };
+      const descriptor: AssistanceDescriptor = {
+        id: 'fallback-codex',
+        name: 'Codex',
+        runtime: 'codex',
+        source: 'fallback',
+      };
       return {
-        assistantName: this.getFallbackAgentName(mainConversation),
+        assistantName: descriptor.name,
         selectionMode: 'fallback',
         selectionReason: 'current runtime default agent',
-        createConversationParams: {
-          type: 'acp',
-          model: {} as TProviderWithModel,
-          name: this.getFallbackAgentName(mainConversation),
-          extra: {
-            workspace,
-            customWorkspace: true,
-            backend: mainConversation.extra.backend,
-            cliPath: mainConversation.extra.cliPath,
-            agentName: mainConversation.extra.agentName,
-            customAgentId:
-              mainConversation.extra.backend === 'custom' ? mainConversation.extra.customAgentId : undefined,
-            sessionMode: mainConversation.extra.sessionMode,
-            currentModelId: mainConversation.extra.currentModelId,
-          },
-        },
+        createConversationParams,
+        binding: this.toBinding(descriptor, createConversationParams),
       };
     }
 
-    if (type === 'codex') {
+    if (mainConversation.type === 'acp') {
+      const createConversationParams: CreateConversationParams = {
+        type: 'acp',
+        model: {} as TProviderWithModel,
+        name: mainConversation.extra.agentName || String(mainConversation.extra.backend),
+        extra: {
+          workspace,
+          customWorkspace: true,
+          backend: mainConversation.extra.backend,
+          cliPath: mainConversation.extra.cliPath,
+          agentName: mainConversation.extra.agentName,
+          customAgentId: mainConversation.extra.backend === 'custom' ? mainConversation.extra.customAgentId : undefined,
+          sessionMode,
+          currentModelId: mainConversation.extra.currentModelId,
+        },
+      };
+      const descriptor: AssistanceDescriptor = {
+        id: 'fallback-acp',
+        name: mainConversation.extra.agentName || String(mainConversation.extra.backend),
+        runtime: 'acp',
+        backend: mainConversation.extra.backend,
+        source: 'fallback',
+      };
       return {
-        assistantName: 'Codex',
+        assistantName: descriptor.name,
         selectionMode: 'fallback',
         selectionReason: 'current runtime default agent',
-        createConversationParams: {
-          type: 'codex',
-          model: {} as TProviderWithModel,
-          name: 'Codex',
-          extra: {
-            workspace,
-            customWorkspace: true,
-            cliPath: mainConversation.extra.cliPath,
-            sessionMode: mainConversation.extra.sessionMode,
-            codexModel: mainConversation.extra.codexModel,
-          },
-        },
+        createConversationParams,
+        binding: this.toBinding(descriptor, createConversationParams),
       };
     }
 
-    if (type === 'openclaw-gateway') {
-      return {
-        assistantName: mainConversation.extra.agentName || 'OpenClaw',
-        selectionMode: 'fallback',
-        selectionReason: 'current runtime default agent',
-        createConversationParams: {
-          type: 'openclaw-gateway',
-          model: {} as TProviderWithModel,
-          name: mainConversation.extra.agentName || 'OpenClaw',
-          extra: {
-            workspace,
-            customWorkspace: true,
-            backend: mainConversation.extra.backend,
-            agentName: mainConversation.extra.agentName,
-            cliPath: mainConversation.extra.gateway?.cliPath,
-          },
-        },
-      };
-    }
-
-    if (type === 'nanobot') {
-      return {
-        assistantName: 'Nano Bot',
-        selectionMode: 'fallback',
-        selectionReason: 'current runtime default agent',
-        createConversationParams: {
-          type: 'nanobot',
-          model: {} as TProviderWithModel,
-          name: 'Nano Bot',
-          extra: {
-            workspace,
-            customWorkspace: true,
-          },
-        },
-      };
-    }
-
-    if (type === 'remote') {
-      return {
-        assistantName: mainConversation.name,
-        selectionMode: 'fallback',
-        selectionReason: 'current runtime default agent',
-        createConversationParams: {
-          type: 'remote',
-          model: {} as TProviderWithModel,
-          name: mainConversation.name,
-          extra: {
-            workspace,
-            customWorkspace: true,
-            remoteAgentId: mainConversation.extra.remoteAgentId,
-          },
-        },
-      };
-    }
-
-    throw new Error(`Unsupported conversation type for assistant selection: ${type satisfies never}`);
+    throw new Error(`Unsupported conversation type for assistant selection: ${mainConversation.type}`);
   }
 
-  private async listCompatiblePresetAssistants(mainConversation: TChatConversation): Promise<AcpBackendConfig[]> {
-    const runtimeKey = this.getRuntimeKey(mainConversation);
-    if (!runtimeKey) {
-      return [];
-    }
-
-    const configuredAssistants = ((await ProcessConfig.get('acp.customAgents')) || []) as AcpBackendConfig[];
-    return configuredAssistants.filter((assistant) => {
-      if (!assistant.isPreset || assistant.enabled === false) {
-        return false;
-      }
-
-      return (assistant.presetAgentType || 'gemini') === runtimeKey;
-    });
-  }
-
-  private matchByAssistantId(
-    assistants: AcpBackendConfig[],
-    assistantId: string | undefined
-  ): AcpBackendConfig | undefined {
-    if (!assistantId) {
-      return undefined;
-    }
-
-    const idCandidates = new Set(normalizeIdCandidates(assistantId));
-    return assistants.find((assistant) =>
-      normalizeIdCandidates(assistant.id).some((candidate) => idCandidates.has(candidate))
-    );
-  }
-
-  private matchByKeyword(assistants: AcpBackendConfig[], command: DelegateTeamCommand): AcpBackendConfig | undefined {
-    const haystack = `${command.title}\n${command.taskPrompt}`.toLowerCase();
-    let bestMatch: AcpBackendConfig | undefined;
-    let bestScore = 0;
-
-    for (const assistant of assistants) {
-      const candidates = [
-        assistant.id,
-        assistant.id.replace(/^builtin-/, ''),
-        assistant.name,
-        ...Object.values(assistant.nameI18n || {}),
-      ]
-        .map((value) => value.trim().toLowerCase())
-        .filter((value) => value.length >= 3);
-
-      const score = candidates.reduce((total, candidate) => {
-        return haystack.includes(candidate) ? total + candidate.length : total;
-      }, 0);
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = assistant;
-      }
-    }
-
-    return bestScore > 0 ? bestMatch : undefined;
-  }
-
-  private getRuntimeKey(conversation: TChatConversation): string | undefined {
-    if (conversation.type === 'gemini') {
-      return 'gemini';
-    }
-
-    if (conversation.type === 'acp') {
-      return conversation.extra.backend;
-    }
-
-    if (conversation.type === 'codex') {
-      return 'codex';
-    }
-
-    return undefined;
+  private toBinding(
+    descriptor: AssistanceDescriptor,
+    createConversationParams: CreateConversationParams
+  ): PersistedAssistantBinding {
+    return {
+      descriptorId: descriptor.id,
+      assistantName: descriptor.name,
+      runtime: descriptor.runtime,
+      createConversationParams: {
+        type: createConversationParams.type,
+        name: createConversationParams.name,
+        model: createConversationParams.model as unknown as Record<string, unknown>,
+        extra: createConversationParams.extra as unknown as Record<string, unknown>,
+      },
+    };
   }
 
   private getGeminiModel(conversation: TChatConversation): TProviderWithModel {
     return conversation.type === 'gemini' ? conversation.model : buildGeminiPlaceholderModel();
-  }
-
-  private getFallbackAgentName(conversation: Extract<TChatConversation, { type: 'acp' }>): string {
-    if (conversation.extra.agentName) {
-      return conversation.extra.agentName;
-    }
-
-    return conversation.extra.backend;
   }
 
   private getWorkspace(conversation: TChatConversation): string | undefined {
@@ -360,11 +474,14 @@ export class AssistantCatalogService {
     return typeof value === 'string' ? value : undefined;
   }
 
-  private async readAssistantRules(
-    assistantId: string,
-    locale: string,
-    fallbackRules?: string
-  ): Promise<string | undefined> {
+  private async readDescriptorRules(descriptor: AssistanceDescriptor): Promise<string | undefined> {
+    const fallbackRules = descriptor.presetRules;
+    const assistantId = descriptor.presetAssistantId || descriptor.id;
+    if (!assistantId) {
+      return fallbackRules;
+    }
+
+    const locale = resolveLocaleKey((await ProcessConfig.get('language')) || 'en-US');
     const assistantsDir = getAssistantsDir();
     const locales = [...new Set([locale, ...ASSISTANT_RULE_LOCALE_FALLBACKS])];
 

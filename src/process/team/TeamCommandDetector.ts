@@ -6,8 +6,6 @@
 
 import type { TeamCommand } from './teamTypes';
 
-const TEAM_COMMAND_BLOCK_REGEX = /<aionui-team-command>\s*([\s\S]*?)\s*<\/aionui-team-command>/gi;
-
 const normalizeString = (value: unknown): string | undefined => {
   if (typeof value !== 'string') {
     return undefined;
@@ -35,24 +33,24 @@ export class TeamCommandDetector {
       return null;
     }
 
-    const matches = [...text.matchAll(TEAM_COMMAND_BLOCK_REGEX)];
-    if (matches.length !== 1) {
-      if (matches.length > 1) {
-        console.warn('[SubagentTeam] Ignoring message with multiple team command blocks.');
-      }
-      return null;
-    }
-
-    const rawJson = matches[0]?.[1]?.trim();
+    const rawJson = text.trim();
     if (!rawJson) {
       return null;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch (error) {
-      console.warn('[SubagentTeam] Failed to parse team command JSON:', error);
+    const candidates = this.extractCandidates(rawJson);
+
+    let parsed: unknown | undefined;
+    for (const candidate of candidates) {
+      try {
+        parsed = JSON.parse(candidate);
+        break;
+      } catch {
+        // try next candidate
+      }
+    }
+    if (parsed === undefined) {
+      console.warn('[SubagentTeam] Failed to parse team command JSON: no valid candidate found');
       return null;
     }
 
@@ -93,5 +91,30 @@ export class TeamCommandDetector {
     }
 
     return null;
+  }
+
+  private extractCandidates(rawText: string): string[] {
+    const candidates = new Set<string>();
+    candidates.add(rawText);
+
+    const hiddenTagMatches = Array.from(
+      rawText.matchAll(/<aionui-team-command(?:\s+hidden)?>([\s\S]*?)<\/aionui-team-command>/gi)
+    );
+    if (hiddenTagMatches.length > 1) {
+      return [];
+    }
+    for (const match of hiddenTagMatches) {
+      const inner = match[1]?.trim();
+      if (inner) {
+        candidates.add(inner);
+      }
+    }
+
+    const firstObjectMatch = rawText.match(/\{[\s\S]*\}/);
+    if (firstObjectMatch?.[0]) {
+      candidates.add(firstObjectMatch[0].trim());
+    }
+
+    return Array.from(candidates);
   }
 }

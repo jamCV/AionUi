@@ -151,6 +151,11 @@ export function initSchema(db: ISqliteDriver): void {
     expected_output TEXT,
     selection_mode TEXT NOT NULL,
     selection_reason TEXT,
+    assistant_binding_json TEXT,
+    display_alias TEXT,
+    trigger_source TEXT,
+    requested_by_message_id TEXT,
+    resume_count INTEGER NOT NULL DEFAULT 0,
     owned_paths_json TEXT NOT NULL,
     last_error TEXT,
     created_at INTEGER NOT NULL,
@@ -192,4 +197,4 @@ export function setDatabaseVersion(db: ISqliteDriver, version: number): void {
  * Current database schema version
  * Update this when adding new migrations in migrations.ts
  */
-export const CURRENT_DB_VERSION = 20;
+export const CURRENT_DB_VERSION = 21;

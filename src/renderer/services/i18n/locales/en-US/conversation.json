@@ -237,11 +237,19 @@
     },
     "taskStatus": {
       "queued": "Queued",
+      "bootstrapping": "Bootstrapping",
       "running": "Running",
       "waiting_user": "Waiting for user",
       "completed": "Completed",
       "failed": "Failed",
+      "interrupted": "Interrupted",
       "cancelled": "Cancelled"
+    },
+    "mention": {
+      "title": "Delegate to Assistant",
+      "hint": "Use ↑/↓ and Enter",
+      "empty": "No assistants available",
+      "badge": "Delegated to {{assistant}}"
     },
     "sidebarStatus": {
       "pending": "Pending",

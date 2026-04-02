@@ -50,6 +50,8 @@ const SendBox: React.FC<{
   sendButtonPrefix?: React.ReactNode;
   slashCommands?: SlashCommandItem[];
   onSlashBuiltinCommand?: (name: string) => void;
+  floatingPanel?: React.ReactNode;
+  onInputKeyDownIntercept?: (e: React.KeyboardEvent) => boolean;
 }> = ({
   onSend,
   onStop,
@@ -68,6 +70,8 @@ const SendBox: React.FC<{
   sendButtonPrefix,
   slashCommands = [],
   onSlashBuiltinCommand,
+  floatingPanel,
+  onInputKeyDownIntercept,
 }) => {
   const layout = useLayoutContext();
   const isMobile = layout?.isMobile ?? false;
@@ -248,6 +252,16 @@ const SendBox: React.FC<{
     },
   });
 
+  const combinedInputKeyDownIntercept = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (onInputKeyDownIntercept?.(event)) {
+        return true;
+      }
+      return slashController.onKeyDown(event);
+    },
+    [onInputKeyDownIntercept, slashController]
+  );
+
   const slashMenuItems = useMemo<SlashCommandMenuItem[]>(
     () =>
       slashController.filteredCommands.map((command) => ({
@@ -258,6 +272,7 @@ const SendBox: React.FC<{
       })),
     [slashController.filteredCommands]
   );
+  const hasFloatingOverlay = slashController.isOpen || !!floatingPanel;
 
   // 使用共享的输入法合成处理
   const { compositionHandlers, createKeyDownHandler } = useCompositionInput();
@@ -390,7 +405,7 @@ const SendBox: React.FC<{
     <div className={className}>
       <div
         ref={containerRef}
-        className={`relative p-16px border-3 b bg-dialog-fill-0 b-solid rd-20px flex flex-col ${slashController.isOpen ? 'overflow-visible' : 'overflow-hidden'} ${isFileDragging ? 'b-dashed' : ''}`}
+        className={`relative p-16px border-3 b bg-dialog-fill-0 b-solid rd-20px flex flex-col ${hasFloatingOverlay ? 'overflow-visible' : 'overflow-hidden'} ${isFileDragging ? 'b-dashed' : ''}`}
         style={{
           transition: 'box-shadow 0.25s ease, border-color 0.25s ease',
           ...(isFileDragging
@@ -425,6 +440,9 @@ const SendBox: React.FC<{
               emptyText={t('messages.slash.empty', { defaultValue: 'No commands found' })}
             />
           </div>
+        )}
+        {!slashController.isOpen && floatingPanel && (
+          <div className='absolute left-12px right-12px bottom-[calc(100%+8px)] z-70'>{floatingPanel}</div>
         )}
         <div style={{ width: '100%' }}>
           {prefix}
@@ -488,7 +506,7 @@ const SendBox: React.FC<{
             onBlur={handleInputBlur}
             {...compositionHandlers}
             autoSize={isSingleLine ? false : { minRows: 1, maxRows: 10 }}
-            onKeyDown={createKeyDownHandler(sendMessageHandler, slashController.onKeyDown)}
+            onKeyDown={createKeyDownHandler(sendMessageHandler, combinedInputKeyDownIntercept)}
           ></Input.TextArea>
           {isSingleLine && (
             <div className='flex items-center gap-2'>

@@ -5,6 +5,10 @@
  */
 
 import { ipcBridge } from '@/common';
+import type {
+  IConversationTeamAssistantDescriptor,
+  IConversationTeamDelegateFromUserParams,
+} from '@/common/adapter/ipcBridge';
 import type { TMessage } from '@/common/chat/chatLib';
 import type { TChatConversation } from '@/common/config/storage';
 import { uuid } from '@/common/utils';
@@ -15,18 +19,18 @@ import type { IConversationRepository } from '@process/services/database/IConver
 import type { CreateTeamTaskInput, ITeamRepository } from '@process/services/database/ITeamRepository';
 import { extractTextFromMessage } from '@process/task/MessageMiddleware';
 import type { IWorkerTaskManager } from '@process/task/IWorkerTaskManager';
+import { AssistantCatalogService, type TeamAssistantSelection } from './AssistantCatalogService';
+import { TeamCommandDetector } from './TeamCommandDetector';
+import type { TeamTurnCompletionEvent } from './teamRuntimeHooks';
 import type {
+  InternalContinuationInput,
+  SubagentCompletionReport,
+  TeamCommand,
   TeamRunRecord,
   TeamTaskRecord,
   TeamTaskStatus,
-  TeamCommand,
-  SubagentCompletionReport,
-  InternalContinuationInput,
 } from './teamTypes';
-import { TeamCommandDetector } from './TeamCommandDetector';
-import type { TeamAssistantSelection } from './AssistantCatalogService';
-import { AssistantCatalogService } from './AssistantCatalogService';
-import type { TeamTurnCompletionEvent } from './teamRuntimeHooks';
+import { isActiveTeamTaskStatus, isSupportedTeamConversation } from './teamTypes';
 
 type DelegateTeamCommand = Extract<TeamCommand, { action: 'delegate' }>;
 
@@ -35,9 +39,10 @@ type CreateDelegatedTaskInput = {
   mainConversation: TChatConversation;
   command: DelegateTeamCommand;
   selection: TeamAssistantSelection;
+  triggerSource: 'user_explicit' | 'agent_auto';
+  requestedByMessageId?: string;
+  displayAlias?: string;
 };
-
-const MAIN_ACTIVE_TASK_STATUSES: TeamTaskStatus[] = ['queued', 'running', 'waiting_user'];
 
 const isFailedSendResult = (result: unknown): result is { success: false; msg?: string } =>
   !!result && typeof result === 'object' && 'success' in result && result.success === false;
@@ -45,7 +50,7 @@ const isFailedSendResult = (result: unknown): result is { success: false; msg?: 
 export class TeamOrchestratorService {
   private readonly handledMainTurnKeys = new Set<string>();
   private readonly handledSubTurnKeys = new Set<string>();
-  private readonly pendingSelections = new Map<string, TeamAssistantSelection>();
+  private readonly recoveredRunIds = new Set<string>();
 
   constructor(
     private readonly teamRepo: ITeamRepository,
@@ -55,6 +60,171 @@ export class TeamOrchestratorService {
     private readonly commandDetector: TeamCommandDetector = new TeamCommandDetector(),
     private readonly assistantCatalogService: AssistantCatalogService = new AssistantCatalogService()
   ) {}
+
+  async listAvailableAssistants(conversationId: string): Promise<IConversationTeamAssistantDescriptor[]> {
+    const mainConversationId = await this.resolveMainConversationId(conversationId);
+    if (!mainConversationId) {
+      return [];
+    }
+
+    const mainConversation = await this.conversationService.getConversation(mainConversationId);
+    if (!mainConversation || !isSupportedTeamConversation(mainConversation)) {
+      return [];
+    }
+
+    const descriptors = await this.assistantCatalogService.listAvailableAssistants(mainConversation);
+    return descriptors.map((descriptor) => ({
+      id: descriptor.id,
+      name: descriptor.name,
+      alias: descriptor.alias,
+      runtime: descriptor.runtime,
+      backend: descriptor.backend,
+      source: descriptor.source,
+    }));
+  }
+
+  async delegateFromUser(params: IConversationTeamDelegateFromUserParams): Promise<{ taskId: string; runId: string }> {
+    const mainConversation = await this.conversationService.getConversation(params.conversation_id);
+    if (!mainConversation) {
+      throw new Error(`Conversation not found: ${params.conversation_id}`);
+    }
+    if (!isSupportedTeamConversation(mainConversation)) {
+      throw new Error('Conversation runtime is not supported for team delegation');
+    }
+
+    const run = await this.ensureRun(mainConversation.id);
+    const activeTasks = await this.getActiveTasks(run.id);
+    if (activeTasks.length > 0) {
+      throw new Error('An active delegated task already exists');
+    }
+
+    const cleanedInput = this.stripMentionToken(params.input);
+    await this.persistUserDelegationMessage(mainConversation.id, params.msg_id, cleanedInput);
+
+    const selection = await this.assistantCatalogService.selectionFromExplicitAssistant(
+      mainConversation,
+      params.delegation.assistantId
+    );
+    const command: DelegateTeamCommand = {
+      action: 'delegate',
+      title: cleanedInput.slice(0, 60) || `Delegated task ${new Date().toISOString()}`,
+      taskPrompt: cleanedInput,
+    };
+
+    const task = await this.createDelegatedTask({
+      run,
+      mainConversation,
+      command,
+      selection,
+      triggerSource: 'user_explicit',
+      requestedByMessageId: params.msg_id,
+      displayAlias: params.delegation.displayAlias,
+    });
+
+    try {
+      await this.spawnSubConversationFromBinding(task.id);
+      await this.dispatchTask(task.id);
+      return { taskId: task.id, runId: run.id };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.markTaskFailed(task.id, run.id, message);
+      throw error;
+    }
+  }
+
+  async stopTask(conversationId: string, taskId: string): Promise<void> {
+    const task = await this.assertTaskOwnedByConversation(conversationId, taskId);
+    if (!task.subConversationId) {
+      throw new Error('Task has no sub-conversation');
+    }
+
+    const subTask = this.workerTaskManager.getTask(task.subConversationId);
+    if (subTask) {
+      await subTask.stop();
+    }
+
+    await this.teamRepo.updateTeamTask(task.id, {
+      status: 'interrupted',
+      updatedAt: Date.now(),
+    });
+    await this.updateRunState(task.runId, {
+      status: 'running',
+      currentPhase: 'delegating',
+      awaitingUserInput: false,
+    });
+  }
+
+  async cancelTask(conversationId: string, taskId: string): Promise<void> {
+    const task = await this.assertTaskOwnedByConversation(conversationId, taskId);
+    if (task.subConversationId) {
+      const subTask = this.workerTaskManager.getTask(task.subConversationId);
+      if (subTask) {
+        await subTask.stop();
+      }
+    }
+
+    await this.teamRepo.updateTeamTask(task.id, {
+      status: 'cancelled',
+      updatedAt: Date.now(),
+    });
+    await this.updateRunState(task.runId, {
+      status: 'running',
+      currentPhase: 'delegating',
+      awaitingUserInput: false,
+    });
+  }
+
+  async retryTask(conversationId: string, taskId: string): Promise<void> {
+    const task = await this.assertTaskOwnedByConversation(conversationId, taskId);
+    if (!['failed', 'interrupted', 'cancelled'].includes(task.status)) {
+      throw new Error(`Task is not retryable: ${task.status}`);
+    }
+
+    await this.teamRepo.updateTeamTask(task.id, {
+      status: 'queued',
+      lastError: undefined,
+      resumeCount: (task.resumeCount || 0) + 1,
+      updatedAt: Date.now(),
+    });
+
+    await this.spawnSubConversationFromBinding(task.id);
+    await this.dispatchTask(task.id);
+  }
+
+  async renameTaskAlias(conversationId: string, taskId: string, displayAlias?: string): Promise<void> {
+    const task = await this.assertTaskOwnedByConversation(conversationId, taskId);
+    const normalizedAlias = displayAlias?.trim() || undefined;
+    await this.teamRepo.updateTeamTask(task.id, {
+      displayAlias: normalizedAlias,
+      updatedAt: Date.now(),
+    });
+
+    if (!task.subConversationId) {
+      return;
+    }
+    const conversation = await this.conversationService.getConversation(task.subConversationId);
+    if (!conversation) {
+      return;
+    }
+
+    await this.conversationService.updateConversation(
+      task.subConversationId,
+      {
+        extra: {
+          team: {
+            ...(conversation.extra.team || {
+              runId: task.runId,
+              role: 'subagent',
+              rootConversationId: task.parentConversationId,
+            }),
+            displayAlias: normalizedAlias,
+          },
+        },
+      },
+      true
+    );
+    this.emitConversationListChanged(task.subConversationId, 'updated');
+  }
 
   async handleConversationTurnCompleted(event: TeamTurnCompletionEvent): Promise<void> {
     const conversation = await this.conversationService.getConversation(event.conversationId);
@@ -115,7 +285,7 @@ export class TeamOrchestratorService {
     this.handledMainTurnKeys.add(dedupeKey);
 
     const latestAssistantText = latestAssistantMessage ? extractTextFromMessage(latestAssistantMessage) : '';
-    const command = this.commandDetector.parse(latestAssistantText);
+    const command = event?.teamCommand || this.commandDetector.parse(latestAssistantText);
     if (!command) {
       return;
     }
@@ -137,10 +307,6 @@ export class TeamOrchestratorService {
     const run = await this.ensureRun(mainConversationId);
     const activeTasks = await this.getActiveTasks(run.id);
     if (activeTasks.length > 0) {
-      console.warn('[SubagentTeam] Ignoring delegate command because an active subtask already exists.', {
-        mainConversationId,
-        runId: run.id,
-      });
       return;
     }
 
@@ -150,10 +316,12 @@ export class TeamOrchestratorService {
       mainConversation,
       command,
       selection,
+      triggerSource: 'agent_auto',
+      requestedByMessageId: event?.assistantMessageId,
     });
 
     try {
-      await this.spawnSubConversation(task.id);
+      await this.spawnSubConversationFromBinding(task.id);
       await this.dispatchTask(task.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -175,10 +343,14 @@ export class TeamOrchestratorService {
       expectedOutput: input.command.expectedOutput,
       selectionMode: input.selection.selectionMode,
       selectionReason: input.selection.selectionReason,
+      assistantBinding: input.selection.binding,
+      displayAlias: input.displayAlias,
+      triggerSource: input.triggerSource,
+      requestedByMessageId: input.requestedByMessageId,
+      resumeCount: 0,
       ownedPaths: input.command.ownedPaths ?? [],
     } satisfies CreateTeamTaskInput);
 
-    this.pendingSelections.set(task.id, input.selection);
     await this.updateRunState(input.run.id, {
       status: 'running',
       currentPhase: 'delegating',
@@ -187,10 +359,17 @@ export class TeamOrchestratorService {
     return task;
   }
 
-  async spawnSubConversation(taskId: string): Promise<string> {
+  async spawnSubConversationFromBinding(taskId: string): Promise<string> {
     const task = await this.teamRepo.getTeamTask(taskId);
     if (!task) {
       throw new Error(`Team task not found: ${taskId}`);
+    }
+
+    if (task.subConversationId) {
+      const existingConversation = await this.conversationService.getConversation(task.subConversationId);
+      if (existingConversation) {
+        return existingConversation.id;
+      }
     }
 
     const run = await this.teamRepo.getTeamRun(task.runId);
@@ -203,18 +382,27 @@ export class TeamOrchestratorService {
       throw new Error(`Parent conversation not found: ${task.parentConversationId}`);
     }
 
-    const selection = this.pendingSelections.get(taskId);
-    if (!selection) {
-      throw new Error(`Assistant selection missing for task: ${taskId}`);
+    if (!task.assistantBinding) {
+      throw new Error(`Task missing assistant binding: ${task.id}`);
     }
 
+    await this.teamRepo.updateTeamTask(task.id, {
+      status: 'bootstrapping',
+      updatedAt: Date.now(),
+    });
+
     const createConversationParams = this.withConversationWorkspace(
-      selection.createConversationParams,
+      {
+        ...(task.assistantBinding.createConversationParams as unknown as CreateConversationParams),
+        model: (task.assistantBinding.createConversationParams.model || {}) as CreateConversationParams['model'],
+        extra: (task.assistantBinding.createConversationParams.extra || {}) as CreateConversationParams['extra'],
+      },
       this.getWorkspace(mainConversation)
     );
+    const subConversationName = task.displayAlias || `${task.title} - ${task.assistantName || 'Assistant'}`;
     const subConversation = await this.conversationService.createConversation({
       ...createConversationParams,
-      name: `${task.title} - ${selection.assistantName}`,
+      name: subConversationName,
     });
 
     await this.conversationService.updateConversation(
@@ -228,8 +416,9 @@ export class TeamOrchestratorService {
             rootConversationId: run.rootConversationId,
             parentConversationId: mainConversation.id,
             taskId: task.id,
-            assistantId: selection.assistantId,
-            assistantName: selection.assistantName,
+            assistantId: task.assistantId,
+            assistantName: task.assistantName,
+            displayAlias: task.displayAlias,
             selectionMode: task.selectionMode,
           },
         },
@@ -241,9 +430,9 @@ export class TeamOrchestratorService {
 
     await this.teamRepo.updateTeamTask(task.id, {
       subConversationId: subConversation.id,
+      status: 'queued',
       updatedAt: Date.now(),
     });
-    this.pendingSelections.delete(task.id);
 
     return subConversation.id;
   }
@@ -414,6 +603,7 @@ export class TeamOrchestratorService {
       return null;
     }
 
+    await this.recoverRunState(mainConversationId);
     const run = await this.teamRepo.findTeamRunByMainConversationId(mainConversationId);
     if (!run) {
       return null;
@@ -443,6 +633,7 @@ export class TeamOrchestratorService {
       title: string;
       assistantId?: string;
       assistantName?: string;
+      displayAlias?: string;
       status: TeamTaskStatus;
       conversationName: string;
       conversationStatus?: TChatConversation['status'];
@@ -455,6 +646,7 @@ export class TeamOrchestratorService {
       return [];
     }
 
+    await this.recoverRunState(mainConversationId);
     const tasks = await this.teamRepo.listTeamTasksByParentConversationId(mainConversationId);
     const childViews = await Promise.all(
       tasks
@@ -465,6 +657,7 @@ export class TeamOrchestratorService {
             return null;
           }
 
+          const displayAlias = task.displayAlias || subConversation.extra.team?.displayAlias;
           return {
             taskId: task.id,
             parentConversationId: task.parentConversationId,
@@ -473,8 +666,9 @@ export class TeamOrchestratorService {
             title: task.title,
             assistantId: task.assistantId,
             assistantName: task.assistantName,
+            displayAlias,
             status: task.status,
-            conversationName: subConversation.name,
+            conversationName: displayAlias || subConversation.name,
             conversationStatus: subConversation.status,
             updatedAt: task.updatedAt,
             summary: await this.extractLatestSummary(task.subConversationId!),
@@ -483,6 +677,63 @@ export class TeamOrchestratorService {
     );
 
     return childViews.filter((item): item is NonNullable<typeof item> => !!item);
+  }
+
+  private async recoverRunState(mainConversationId: string): Promise<void> {
+    const run = await this.teamRepo.findTeamRunByMainConversationId(mainConversationId);
+    if (!run || this.recoveredRunIds.has(run.id)) {
+      return;
+    }
+    this.recoveredRunIds.add(run.id);
+    const updateTask = this.teamRepo.updateTeamTask?.bind(this.teamRepo);
+
+    const tasks = await this.teamRepo.listTeamTasksByRun(run.id);
+    for (const task of tasks) {
+      if (task.status === 'bootstrapping') {
+        if (updateTask) {
+          await updateTask(task.id, {
+            status: 'interrupted',
+            lastError: task.lastError || 'Task bootstrapping was interrupted.',
+            updatedAt: Date.now(),
+          });
+        }
+        continue;
+      }
+
+      if (task.status === 'queued' && !task.subConversationId) {
+        try {
+          await this.spawnSubConversationFromBinding(task.id);
+        } catch (error) {
+          if (updateTask) {
+            await updateTask(task.id, {
+              status: 'interrupted',
+              lastError: error instanceof Error ? error.message : String(error),
+              updatedAt: Date.now(),
+            });
+          }
+        }
+        continue;
+      }
+
+      if (task.status === 'running') {
+        const isRuntimeAlive = task.subConversationId
+          ? !!this.workerTaskManager.getTask(task.subConversationId)
+          : false;
+        if (!isRuntimeAlive && updateTask) {
+          await updateTask(task.id, {
+            status: 'interrupted',
+            lastError: task.lastError || 'Runtime state was lost after restart.',
+            updatedAt: Date.now(),
+          });
+        }
+      }
+    }
+
+    await this.updateRunState(run.id, {
+      status: run.status,
+      currentPhase: run.currentPhase,
+      awaitingUserInput: run.awaitingUserInput,
+    });
   }
 
   private async buildSubagentCompletionReport(
@@ -502,9 +753,11 @@ export class TeamOrchestratorService {
     return {
       status: needsUserDecision
         ? 'waiting_user'
-        : event?.completionSignal === 'error' || event?.completionSignal === 'stop'
-          ? 'failed'
-          : 'completed',
+        : event?.completionSignal === 'stop'
+          ? 'interrupted'
+          : event?.completionSignal === 'error'
+            ? 'failed'
+            : 'completed',
       summary: normalizedSummary,
       touchedFiles: touchedFiles.length > 0 ? touchedFiles : task.ownedPaths,
       needsUserDecision,
@@ -664,32 +917,23 @@ export class TeamOrchestratorService {
       return 'gemini';
     }
 
-    if (conversation.type === 'openclaw-gateway') {
-      return 'openclaw-gateway';
-    }
-
-    if (conversation.type === 'nanobot') {
-      return 'nanobot';
-    }
-
-    if (conversation.type === 'remote') {
-      return 'remote';
-    }
-
     return undefined;
   }
 
   private async getActiveTasks(runId: string): Promise<TeamTaskRecord[]> {
     const tasks = await this.teamRepo.listTeamTasksByRun(runId);
-    return tasks.filter((task) => MAIN_ACTIVE_TASK_STATUSES.includes(task.status));
+    return tasks.filter((task) => isActiveTeamTaskStatus(task.status));
   }
 
   private async updateRunState(
     runId: string,
     patch: Partial<Pick<TeamRunRecord, 'status' | 'currentPhase' | 'awaitingUserInput'>>
   ): Promise<void> {
+    if (!this.teamRepo.updateTeamRun) {
+      return;
+    }
     const tasks = await this.teamRepo.listTeamTasksByRun(runId);
-    const activeTaskCount = tasks.filter((task) => MAIN_ACTIVE_TASK_STATUSES.includes(task.status)).length;
+    const activeTaskCount = tasks.filter((task) => isActiveTeamTaskStatus(task.status)).length;
     await this.teamRepo.updateTeamRun(runId, {
       ...patch,
       activeTaskCount,
@@ -764,5 +1008,36 @@ export class TeamOrchestratorService {
 
     const questions = lines.filter((line) => line.endsWith('?') || line.includes('need user'));
     return [...new Set(questions)].slice(0, 5);
+  }
+
+  private stripMentionToken(input: string): string {
+    return input.replace(/^\s*@[^\s@]+\s*/, '').trim();
+  }
+
+  private async persistUserDelegationMessage(conversationId: string, msgId: string, input: string): Promise<void> {
+    const message: TMessage = {
+      id: msgId,
+      msg_id: msgId,
+      conversation_id: conversationId,
+      type: 'text',
+      position: 'right',
+      content: { content: input },
+      createdAt: Date.now(),
+      status: 'finish',
+    };
+    await this.conversationRepo.insertMessage(message);
+  }
+
+  private async assertTaskOwnedByConversation(conversationId: string, taskId: string): Promise<TeamTaskRecord> {
+    const mainConversationId = await this.resolveMainConversationId(conversationId);
+    if (!mainConversationId) {
+      throw new Error('Conversation not found');
+    }
+
+    const task = await this.teamRepo.getTeamTask(taskId);
+    if (!task || task.parentConversationId !== mainConversationId) {
+      throw new Error('Task not found in current conversation');
+    }
+    return task;
   }
 }

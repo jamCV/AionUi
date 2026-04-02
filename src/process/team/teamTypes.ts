@@ -4,9 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { TChatConversation } from '@/common/config/storage';
+
+export type SupportedTeamRuntime = 'codex' | 'gemini' | 'acp';
+export type TriggerSource = 'user_explicit' | 'agent_auto';
+
 export type TeamRunStatus = 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
 
-export type TeamTaskStatus = 'queued' | 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
+export type TeamTaskStatus =
+  | 'queued'
+  | 'bootstrapping'
+  | 'running'
+  | 'waiting_user'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+  | 'cancelled';
 
 export type TeamSelectionMode = 'recommended' | 'manual' | 'fallback';
 
@@ -37,14 +50,45 @@ export type TeamTaskRecord = {
   expectedOutput?: string;
   selectionMode: TeamSelectionMode;
   selectionReason?: string;
+  assistantBinding?: PersistedAssistantBinding;
+  assistantBindingJson?: string;
+  displayAlias?: string;
+  triggerSource?: TriggerSource;
+  requestedByMessageId?: string;
+  resumeCount: number;
   ownedPaths: string[];
   lastError?: string;
   createdAt: number;
   updatedAt: number;
 };
 
+export type AssistanceDescriptor = {
+  id: string;
+  name: string;
+  alias?: string;
+  runtime: SupportedTeamRuntime;
+  backend?: string;
+  presetAssistantId?: string;
+  customAgentId?: string;
+  enabledSkills?: string[];
+  presetRules?: string;
+  source: 'preset' | 'custom' | 'extension' | 'fallback';
+};
+
+export type PersistedAssistantBinding = {
+  descriptorId: string;
+  assistantName: string;
+  runtime: SupportedTeamRuntime;
+  createConversationParams: {
+    type: TChatConversation['type'];
+    name?: string;
+    model?: Record<string, unknown>;
+    extra?: Record<string, unknown>;
+  };
+};
+
 export type SubagentCompletionReport = {
-  status: 'completed' | 'failed' | 'waiting_user';
+  status: 'completed' | 'failed' | 'waiting_user' | 'interrupted';
   summary: string;
   touchedFiles: string[];
   needsUserDecision: boolean;
@@ -73,3 +117,21 @@ export type TeamCommand =
       action: 'complete';
       summary: string;
     };
+
+export const SUPPORTED_TEAM_RUNTIMES: SupportedTeamRuntime[] = ['codex', 'gemini', 'acp'];
+
+export const isSupportedTeamConversation = (conversation: TChatConversation): boolean => {
+  if (conversation.extra?.team?.role === 'subagent') {
+    return false;
+  }
+
+  return conversation.type === 'codex' || conversation.type === 'gemini' || conversation.type === 'acp';
+};
+
+export const isSupportedTeamAssistant = (descriptor: AssistanceDescriptor): boolean => {
+  return SUPPORTED_TEAM_RUNTIMES.includes(descriptor.runtime);
+};
+
+export const isActiveTeamTaskStatus = (status: TeamTaskStatus): boolean => {
+  return status === 'queued' || status === 'bootstrapping' || status === 'running' || status === 'waiting_user';
+};

@@ -168,6 +168,7 @@ export type TeamConversationMeta = {
   taskId?: string;
   assistantId?: string;
   assistantName?: string;
+  displayAlias?: string;
   selectionMode?: 'recommended' | 'manual' | 'fallback';
 };
 
