@@ -62,10 +62,10 @@ const TurnSummaryPanel: React.FC<TurnSummaryPanelProps> = ({ conversationId }) =
 
       {snapshot && (
         <div className='mb-12px rounded-12px border border-solid border-3 bg-2'>
-          <div className='flex flex-wrap items-start justify-between gap-12px px-16px py-12px'>
+          <div className='flex items-center justify-between gap-12px px-16px py-12px'>
             <div className='min-w-0 flex-1'>
-              <div className='flex items-center gap-8px'>
-                <span className='text-14px font-medium text-t-primary'>{t('conversation.turnSummary.title')}</span>
+              <div className='flex items-center gap-8px min-w-0 overflow-hidden'>
+                <span className='truncate text-14px font-medium text-t-primary'>{t('conversation.turnSummary.title')}</span>
                 <Tag color={getLifecycleTone(snapshot.lifecycleStatus)}>
                   {t(`conversation.turnSummary.lifecycle.${snapshot.lifecycleStatus}`)}
                 </Tag>
@@ -73,11 +73,15 @@ const TurnSummaryPanel: React.FC<TurnSummaryPanelProps> = ({ conversationId }) =
                   <Tag color={getReviewTone(snapshot.reviewStatus)}>{t(getReviewKey(snapshot.reviewStatus))}</Tag>
                 )}
               </div>
-              <div className='mt-6px text-13px text-t-secondary'>{renderFileCount(t, snapshot)}</div>
-              <div className='mt-6px text-12px text-t-secondary'>{t(getDescriptionKey(snapshot))}</div>
+              {expanded && (
+                <>
+                  <div className='mt-6px text-13px text-t-secondary'>{renderFileCount(t, snapshot)}</div>
+                  <div className='mt-6px text-12px text-t-secondary'>{t(getDescriptionKey(snapshot))}</div>
+                </>
+              )}
             </div>
 
-            <div className='flex flex-wrap items-center justify-end gap-8px'>
+            <div className='flex items-center justify-end gap-8px shrink-0'>
               {canKeep && (
                 <Button size='mini' loading={actionLoading === 'keep'} onClick={() => void handleKeep()}>
                   {t('messages.turnSnapshot.keep')}
@@ -116,7 +120,10 @@ const TurnSummaryPanel: React.FC<TurnSummaryPanelProps> = ({ conversationId }) =
               {files.length === 0 ? (
                 <div className='text-12px text-t-secondary'>{t('conversation.turnSummary.waitingForChanges')}</div>
               ) : (
-                <div className='flex flex-col gap-8px'>
+                <div
+                  data-testid='turn-summary-file-list'
+                  className='max-h-320px overflow-y-auto pr-4px flex flex-col gap-8px'
+                >
                   {files.map((file) => (
                     <div
                       key={file.fullPath}

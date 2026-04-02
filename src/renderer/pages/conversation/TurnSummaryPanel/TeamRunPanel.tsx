@@ -183,23 +183,27 @@ const TeamRunPanel: React.FC<TeamRunPanelProps> = ({ conversationId }) => {
 
   return (
     <div className='mb-12px rounded-12px border border-solid border-3 bg-2'>
-      <div className='flex flex-wrap items-start justify-between gap-12px px-16px py-12px'>
+      <div className='flex items-center justify-between gap-12px px-16px py-12px'>
         <div className='min-w-0 flex-1'>
-          <div className='flex flex-wrap items-center gap-8px'>
-            <span className='text-14px font-medium text-t-primary'>{t('conversation.team.title')}</span>
+          <div className='flex items-center gap-8px min-w-0 overflow-hidden'>
+            <span className='truncate text-14px font-medium text-t-primary'>{t('conversation.team.title')}</span>
             <Tag color={getRunTone(teamRunView.run.status)}>
               {t(`conversation.team.runStatus.${teamRunView.run.status}`)}
             </Tag>
             <Tag color='arcoblue'>{t(`conversation.team.phase.${teamRunView.run.currentPhase}`)}</Tag>
           </div>
-          <div className='mt-6px text-13px text-t-secondary'>
-            {t('conversation.team.taskCount', { count: tasks.length })}
-          </div>
-          <div className='mt-6px text-12px text-t-secondary'>
-            {teamRunView.run.awaitingUserInput
-              ? t('conversation.team.awaitingUserInput')
-              : t('conversation.team.activeTaskCount', { count: teamRunView.run.activeTaskCount })}
-          </div>
+          {expanded && (
+            <>
+              <div className='mt-6px text-13px text-t-secondary'>
+                {t('conversation.team.taskCount', { count: tasks.length })}
+              </div>
+              <div className='mt-6px text-12px text-t-secondary'>
+                {teamRunView.run.awaitingUserInput
+                  ? t('conversation.team.awaitingUserInput')
+                  : t('conversation.team.activeTaskCount', { count: teamRunView.run.activeTaskCount })}
+              </div>
+            </>
+          )}
         </div>
 
         <Button

@@ -312,6 +312,97 @@ describe('TurnSummaryPanel', () => {
     );
   });
 
+  it('keeps the turn summary header compact while collapsed', async () => {
+    render(<TurnSummaryPanel conversationId='conv-1' />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Turn Summary')).toBeTruthy();
+      expect(screen.getByText('Expand')).toBeTruthy();
+    });
+
+    expect(screen.queryByText('1 File Changes')).toBeNull();
+    expect(screen.queryByText('Review these changes before starting the next turn.')).toBeNull();
+
+    fireEvent.click(screen.getByText('Expand'));
+
+    await waitFor(() => {
+      expect(screen.getByText('1 File Changes')).toBeTruthy();
+      expect(screen.getByText('Review these changes before starting the next turn.')).toBeTruthy();
+    });
+  });
+
+  it('adds an internal scroll container for long file lists', async () => {
+    currentSnapshot = makeSnapshot({
+      fileCount: 30,
+      files: Array.from({ length: 30 }, (_, index) => ({
+        id: `file-${index}`,
+        turnId: 'turn-1',
+        conversationId: 'conv-1',
+        filePath: `src/example-${index}.ts`,
+        fileName: `example-${index}.ts`,
+        action: 'update',
+        beforeExists: true,
+        afterExists: true,
+        beforeHash: `before-${index}`,
+        afterHash: `after-${index}`,
+        beforeContent: 'before',
+        afterContent: 'after',
+        unifiedDiff: `diff --git a/src/example-${index}.ts b/src/example-${index}.ts\n@@ -1 +1 @@\n-before\n+after`,
+        sourceMessageIds: ['msg-1'],
+        revertSupported: true,
+        createdAt: 1,
+        updatedAt: 2,
+      })),
+    });
+
+    render(<TurnSummaryPanel conversationId='conv-1' />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Expand')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('Expand'));
+
+    const list = await screen.findByTestId('turn-summary-file-list');
+    expect(list.className).toContain('max-h-320px');
+    expect(list.className).toContain('overflow-y-auto');
+    expect(screen.getByText('example-0.ts')).toBeTruthy();
+    expect(screen.getByText('example-29.ts')).toBeTruthy();
+  });
+
+  it('keeps the team run header compact while collapsed', async () => {
+    currentSnapshot = makeSnapshot({
+      completedAt: undefined,
+      completionSignal: undefined,
+      lifecycleStatus: 'running',
+      fileCount: 0,
+      files: [],
+    });
+    currentTeamRunView = {
+      run: {
+        id: 'run-1',
+        mainConversationId: 'conv-1',
+        rootConversationId: 'conv-1',
+        status: 'completed',
+        currentPhase: 'completed',
+        awaitingUserInput: false,
+        activeTaskCount: 0,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      tasks: [],
+    };
+
+    render(<TurnSummaryPanel conversationId='conv-1' />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Team Run')).toBeTruthy();
+      expect(screen.getAllByText('Expand').length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByText('0 task(s)')).toBeNull();
+    expect(screen.queryByText('0 active task(s)')).toBeNull();
+  });
+
   it('renders team runs even when no turn snapshot exists', async () => {
     currentTeamRunView = {
       run: {
