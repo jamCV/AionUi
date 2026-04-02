@@ -7,10 +7,35 @@
 import type { TMessage } from '@/common/chat/chatLib';
 import { composeMessage } from '@/common/chat/chatLib';
 import type { AcpBackend } from '@/common/types/acpTypes';
+import { hasHiddenTeamCommandPayload, stripHiddenTeamCommandPayloads } from '@/common/chat/teamCommandText';
 import { getDatabase } from '../services/database/export';
 import { ProcessChat } from './initStorage';
 
 const Cache = new Map<string, ConversationManageWithDB>();
+
+const sanitizeMessageForPersistence = (message: TMessage): TMessage => {
+  if (message.type !== 'text' || typeof message.content.content !== 'string') {
+    return message;
+  }
+
+  const rawContent = message.content.content;
+  if (!hasHiddenTeamCommandPayload(rawContent)) {
+    return message;
+  }
+
+  const sanitizedContent = stripHiddenTeamCommandPayloads(rawContent).trim();
+  if (sanitizedContent === rawContent) {
+    return message;
+  }
+
+  return {
+    ...message,
+    content: {
+      ...message.content,
+      content: sanitizedContent,
+    },
+  };
+};
 
 // Place all messages in a unified update queue based on the conversation
 // Ensure that the update mechanism for each message is consistent with the front end, meaning that the database and UI data are in sync
@@ -90,7 +115,7 @@ class ConversationManageWithDB {
  * Wraps async work inside an IIFE to keep call sites synchronous.
  */
 export const addMessage = (conversation_id: string, message: TMessage): void => {
-  ConversationManageWithDB.get(conversation_id).sync('insert', message);
+  ConversationManageWithDB.get(conversation_id).sync('insert', sanitizeMessageForPersistence(message));
 };
 
 /**
@@ -139,7 +164,7 @@ export const addOrUpdateMessage = (conversation_id: string, message: TMessage, b
     return;
   }
 
-  ConversationManageWithDB.get(conversation_id).sync('accumulate', message);
+  ConversationManageWithDB.get(conversation_id).sync('accumulate', sanitizeMessageForPersistence(message));
 };
 
 export const drainConversationMessageWrites = async (conversation_id: string): Promise<void> => {

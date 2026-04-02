@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
+import { stripHiddenTeamCommandTags, hasHiddenTeamCommandTags } from '@renderer/utils/chat/thinkTagFilter';
 import { useConversationTabs } from '../hooks/ConversationTabsContext';
 import { useTeamRunView } from './useTeamRunView';
 
@@ -233,7 +234,11 @@ const TeamRunPanel: React.FC<TeamRunPanelProps> = ({ conversationId }) => {
                 const childConversation = childConversationByTaskId.get(task.id);
                 const targetConversationId = childConversation?.subConversationId ?? task.subConversationId;
                 const helperName = task.assistantName || childConversation?.assistantName;
-                const summaryText = task.lastError || task.summary || childConversation?.summary;
+                const rawSummaryText = task.lastError || task.summary || childConversation?.summary;
+                const summaryText =
+                  rawSummaryText && hasHiddenTeamCommandTags(rawSummaryText)
+                    ? stripHiddenTeamCommandTags(rawSummaryText)
+                    : rawSummaryText;
 
                 return (
                   <div

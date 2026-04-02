@@ -36,6 +36,15 @@ describe('TeamHiddenCommandCodec', () => {
     expect(codec.stripIncrementally('normal content')).toBe('normal content');
   });
 
+  it('preserves literal mentions of the hidden tag in visible text', () => {
+    const visible = consumeStreamingChunks([
+      'sanitize hidden `<aionui-team-com',
+      'mand hidden>` blocks before rendering',
+    ]);
+
+    expect(visible).toBe('sanitize hidden `<aionui-team-command hidden>` blocks before rendering');
+  });
+
   it('extracts and strips hidden command blocks', () => {
     const codec = new TeamHiddenCommandCodec();
     const raw =
@@ -43,5 +52,13 @@ describe('TeamHiddenCommandCodec', () => {
 
     expect(codec.extractCommands(raw)).toEqual([{ action: 'complete', summary: 'done' }]);
     expect(codec.stripCommands(raw)).toBe('xy');
+  });
+
+  it('does not treat literal tag mentions as commands', () => {
+    const codec = new TeamHiddenCommandCodec();
+    const raw = 'sanitize hidden `<aionui-team-command hidden>` blocks before rendering';
+
+    expect(codec.extractCommands(raw)).toEqual([]);
+    expect(codec.stripCommands(raw)).toBe(raw);
   });
 });

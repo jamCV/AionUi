@@ -6,9 +6,12 @@
 
 import type { TeamCommand } from './teamTypes';
 import { TeamCommandDetector } from './TeamCommandDetector';
-
-const HIDDEN_TEAM_COMMAND_REGEX = /<aionui-team-command\s+hidden>\s*([\s\S]*?)\s*<\/aionui-team-command>/gi;
-const HIDDEN_TEAM_COMMAND_START_TAG = '<aionui-team-command hidden>';
+import {
+  extractHiddenTeamCommandPayloads,
+  findLastHiddenTeamCommandPayloadStart,
+  HIDDEN_TEAM_COMMAND_START_TAG,
+  stripHiddenTeamCommandPayloads,
+} from '@/common/chat/teamCommandText';
 
 export class TeamHiddenCommandCodec {
   constructor(private readonly detector: TeamCommandDetector = new TeamCommandDetector()) {}
@@ -19,9 +22,8 @@ export class TeamHiddenCommandCodec {
     }
 
     const commands: TeamCommand[] = [];
-    const matches = rawText.matchAll(HIDDEN_TEAM_COMMAND_REGEX);
-    for (const match of matches) {
-      const parsed = this.detector.parse(match[1]);
+    for (const payload of extractHiddenTeamCommandPayloads(rawText)) {
+      const parsed = this.detector.parse(payload);
       if (parsed) {
         commands.push(parsed);
       }
@@ -34,7 +36,7 @@ export class TeamHiddenCommandCodec {
       return rawText;
     }
 
-    return rawText.replace(HIDDEN_TEAM_COMMAND_REGEX, '').trim();
+    return stripHiddenTeamCommandPayloads(rawText).trim();
   }
 
   stripIncrementally(rawStreamBuffer: string): string {
@@ -43,9 +45,9 @@ export class TeamHiddenCommandCodec {
     }
 
     // Remove completed hidden command blocks first.
-    const withoutCompleted = rawStreamBuffer.replace(HIDDEN_TEAM_COMMAND_REGEX, '');
+    const withoutCompleted = stripHiddenTeamCommandPayloads(rawStreamBuffer);
     // If a full start tag is present without a matching closing tag yet, hide from that start.
-    const partialStart = withoutCompleted.lastIndexOf(HIDDEN_TEAM_COMMAND_START_TAG);
+    const partialStart = findLastHiddenTeamCommandPayloadStart(withoutCompleted);
     if (partialStart < 0) {
       // Also hide a trailing partial prefix of the start tag to avoid leaking split chunks
       // like "<aionui-team-com" during streaming.

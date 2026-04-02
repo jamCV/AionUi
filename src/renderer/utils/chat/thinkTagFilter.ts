@@ -10,6 +10,8 @@
  * This handles historical messages that were saved before the filter was implemented
  */
 
+import { hasHiddenTeamCommandPayload, stripHiddenTeamCommandPayloads } from '@/common/chat/teamCommandText';
+
 /**
  * Strip think tags from content
  * @param content - The content to filter
@@ -55,6 +57,29 @@ export function hasThinkTags(content: string): boolean {
 }
 
 /**
+ * Strip hidden team command tags from content before rendering.
+ * This protects visible UI surfaces from leaked internal team protocol text.
+ */
+export function stripHiddenTeamCommandTags(content: string): string {
+  if (!content || typeof content !== 'string') {
+    return content;
+  }
+
+  return stripHiddenTeamCommandPayloads(content).replace(/\n{2,}/g, '\n').trim();
+}
+
+/**
+ * Check if content contains hidden team command tags.
+ */
+export function hasHiddenTeamCommandTags(content: string): boolean {
+  if (!content || typeof content !== 'string') {
+    return false;
+  }
+
+  return hasHiddenTeamCommandPayload(content);
+}
+
+/**
  * Filter think tags from message content object
  * Handles various message content structures
  * @param content - The message content (string or object)
@@ -63,17 +88,33 @@ export function hasThinkTags(content: string): boolean {
 export function filterMessageContent(content: any): any {
   // Handle string content
   if (typeof content === 'string') {
-    return hasThinkTags(content) ? stripThinkTags(content) : content;
+    let nextContent = content;
+    if (hasThinkTags(nextContent)) {
+      nextContent = stripThinkTags(nextContent);
+    }
+    if (hasHiddenTeamCommandTags(nextContent)) {
+      nextContent = stripHiddenTeamCommandTags(nextContent);
+    }
+    return nextContent;
   }
 
   // Handle object with content property
   if (content && typeof content === 'object' && 'content' in content) {
     const innerContent = content.content;
-    if (typeof innerContent === 'string' && hasThinkTags(innerContent)) {
-      return {
-        ...content,
-        content: stripThinkTags(innerContent),
-      };
+    if (typeof innerContent === 'string') {
+      let nextContent = innerContent;
+      if (hasThinkTags(nextContent)) {
+        nextContent = stripThinkTags(nextContent);
+      }
+      if (hasHiddenTeamCommandTags(nextContent)) {
+        nextContent = stripHiddenTeamCommandTags(nextContent);
+      }
+      if (nextContent !== innerContent) {
+        return {
+          ...content,
+          content: nextContent,
+        };
+      }
     }
   }
 

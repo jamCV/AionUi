@@ -17,7 +17,7 @@ import CollapsibleContent from '@renderer/components/chat/CollapsibleContent';
 import FilePreview from '@renderer/components/media/FilePreview';
 import HorizontalFileList from '@renderer/components/media/HorizontalFileList';
 import MarkdownView from '@renderer/components/Markdown';
-import { stripThinkTags, hasThinkTags } from '@renderer/utils/chat/thinkTagFilter';
+import { stripThinkTags, hasThinkTags, stripHiddenTeamCommandTags, hasHiddenTeamCommandTags } from '@renderer/utils/chat/thinkTagFilter';
 import MessageCronBadge from './MessageCronBadge';
 
 const parseFileMarker = (content: string) => {
@@ -56,10 +56,18 @@ const MessageText: React.FC<{ message: IMessageText }> = ({ message }) => {
   // 在渲染前过滤 think 标签
   const contentToRender = useMemo(() => {
     const rawContent = message.content.content;
-    if (typeof rawContent === 'string' && hasThinkTags(rawContent)) {
-      return stripThinkTags(rawContent);
+    if (typeof rawContent !== 'string') {
+      return rawContent;
     }
-    return rawContent;
+
+    let nextContent = rawContent;
+    if (hasThinkTags(nextContent)) {
+      nextContent = stripThinkTags(nextContent);
+    }
+    if (hasHiddenTeamCommandTags(nextContent)) {
+      nextContent = stripHiddenTeamCommandTags(nextContent);
+    }
+    return nextContent;
   }, [message.content.content]);
 
   const { text, files } = parseFileMarker(contentToRender);
@@ -69,7 +77,7 @@ const MessageText: React.FC<{ message: IMessageText }> = ({ message }) => {
   const isUserMessage = message.position === 'right';
 
   // 过滤空内容，避免渲染空DOM
-  if (!message.content.content || (typeof message.content.content === 'string' && !message.content.content.trim())) {
+  if (!contentToRender || (typeof contentToRender === 'string' && !contentToRender.trim())) {
     return null;
   }
 

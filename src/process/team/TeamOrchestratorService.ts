@@ -19,8 +19,8 @@ import type { IConversationRepository } from '@process/services/database/IConver
 import type { CreateTeamTaskInput, ITeamRepository } from '@process/services/database/ITeamRepository';
 import { extractTextFromMessage } from '@process/task/MessageMiddleware';
 import type { IWorkerTaskManager } from '@process/task/IWorkerTaskManager';
-import { AssistantCatalogService, type TeamAssistantSelection } from './AssistantCatalogService';
-import { TeamCommandDetector } from './TeamCommandDetector';
+import { AssistantCatalogService, type TeamAssistantSelection } from '@/process/team/AssistantCatalogService';
+import { TeamHiddenCommandCodec } from './TeamHiddenCommandCodec';
 import type { TeamTurnCompletionEvent } from './teamRuntimeHooks';
 import type {
   InternalContinuationInput,
@@ -51,13 +51,13 @@ export class TeamOrchestratorService {
   private readonly handledMainTurnKeys = new Set<string>();
   private readonly handledSubTurnKeys = new Set<string>();
   private readonly recoveredRunIds = new Set<string>();
+  private readonly hiddenCommandCodec = new TeamHiddenCommandCodec();
 
   constructor(
     private readonly teamRepo: ITeamRepository,
     private readonly conversationRepo: IConversationRepository,
     private readonly conversationService: IConversationService,
     private readonly workerTaskManager: IWorkerTaskManager,
-    private readonly commandDetector: TeamCommandDetector = new TeamCommandDetector(),
     private readonly assistantCatalogService: AssistantCatalogService = new AssistantCatalogService()
   ) {}
 
@@ -284,8 +284,7 @@ export class TeamOrchestratorService {
     }
     this.handledMainTurnKeys.add(dedupeKey);
 
-    const latestAssistantText = latestAssistantMessage ? extractTextFromMessage(latestAssistantMessage) : '';
-    const command = event?.teamCommand || this.commandDetector.parse(latestAssistantText);
+    const command = event?.teamCommand;
     if (!command) {
       return;
     }
@@ -742,7 +741,7 @@ export class TeamOrchestratorService {
     event: TeamTurnCompletionEvent | undefined,
     latestAssistantMessage: TMessage | undefined
   ): Promise<SubagentCompletionReport> {
-    const summary = (latestAssistantMessage ? extractTextFromMessage(latestAssistantMessage) : '').trim();
+    const summary = this.sanitizeSummaryText(latestAssistantMessage ? extractTextFromMessage(latestAssistantMessage) : '');
     const normalizedSummary =
       summary || (event?.completionSignal === 'error' ? 'Subtask ended with an error.' : 'Subtask completed.');
     const openQuestions = this.extractOpenQuestions(normalizedSummary);
@@ -780,10 +779,19 @@ export class TeamOrchestratorService {
     return [...new Set(snapshot.files.map((file) => file.filePath))];
   }
 
+  private sanitizeSummaryText(content: string | undefined): string | undefined {
+    if (!content) {
+      return content;
+    }
+
+    const sanitized = this.hiddenCommandCodec.stripCommands(content).replace(/\n{2,}/g, '\n').trim();
+    return sanitized || undefined;
+  }
+
   private async extractLatestSummary(conversationId: string): Promise<string | undefined> {
     const latestAssistantMessage = await this.findLatestAssistantMessage(conversationId);
     if (latestAssistantMessage) {
-      const summary = extractTextFromMessage(latestAssistantMessage).trim();
+      const summary = this.sanitizeSummaryText(extractTextFromMessage(latestAssistantMessage).trim());
       if (summary) {
         return summary;
       }
@@ -792,7 +800,7 @@ export class TeamOrchestratorService {
     const messages = await this.conversationRepo.getMessages(conversationId, 0, 50, 'DESC');
     const latestErrorMessage = messages.data.find((message) => message.type === 'tips');
     if (latestErrorMessage?.type === 'tips') {
-      return latestErrorMessage.content.content;
+      return this.sanitizeSummaryText(latestErrorMessage.content.content);
     }
 
     return undefined;
