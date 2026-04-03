@@ -193,6 +193,7 @@ lint-results.txt
 
 # Superpowers brainstorm tool (runtime files, session data)
 .superpowers/
+docs/superpowers/
 resources/bundled-bun
 
 # Server build output
@@ -204,6 +205,9 @@ dist-server/
 .aionui/cache/
 .aionui/local-launch/
 .agent/
+.claude
+uploads
+*image_aionui_*
 
 # Local AI tool state files
 .claude/settings.local.json
