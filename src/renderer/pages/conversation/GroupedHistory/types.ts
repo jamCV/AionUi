@@ -12,21 +12,25 @@ export type WorkspaceGroup = {
   conversations: TChatConversation[];
 };
 
-export type TimelineItem = {
-  type: 'workspace' | 'conversation';
+export type WorkspaceDateGroup = {
+  key: string;
+  label: string;
   time: number;
-  workspaceGroup?: WorkspaceGroup;
-  conversation?: TChatConversation;
+  conversations: TChatConversation[];
 };
 
-export type TimelineSection = {
-  timeline: string;
-  items: TimelineItem[];
+export type WorkspaceHistoryGroup = {
+  key: string;
+  workspace: string;
+  displayName: string;
+  isTemporaryBucket: boolean;
+  time: number;
+  dateGroups: WorkspaceDateGroup[];
 };
 
 export type GroupedHistoryResult = {
   pinnedConversations: TChatConversation[];
-  timelineSections: TimelineSection[];
+  workspaceGroups: WorkspaceHistoryGroup[];
 };
 
 export type ExportZipFile = {

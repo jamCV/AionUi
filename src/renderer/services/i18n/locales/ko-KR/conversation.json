@@ -65,6 +65,7 @@
     "pinned": "Pinned",
     "pinFailed": "Pin operation failed",
     "pinnedSection": "Pinned",
+    "temporaryWorkspaceGroup": "임시 공간",
     "deleteSuccess": "삭제되었습니다",
     "deleteFailed": "삭제에 실패했습니다"
   },

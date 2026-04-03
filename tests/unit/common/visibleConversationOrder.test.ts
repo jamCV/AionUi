@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { TChatConversation } from '../../../src/common/config/storage';
-import type { TimelineSection, WorkspaceGroup } from '../../../src/renderer/pages/conversation/GroupedHistory/types';
+import type { WorkspaceDateGroup, WorkspaceHistoryGroup } from '../../../src/renderer/pages/conversation/GroupedHistory/types';
 import { buildVisibleConversationIds } from '../../../src/renderer/pages/conversation/GroupedHistory/utils/visibleConversationOrder';
 
 const createConversation = (id: string): TChatConversation => ({
@@ -29,62 +29,43 @@ const createConversation = (id: string): TChatConversation => ({
   } as TChatConversation['model'],
 });
 
-const createWorkspaceGroup = (workspace: string, conversationIds: string[]): WorkspaceGroup => ({
-  workspace,
-  displayName: workspace,
+const createDateGroup = (workspace: string, date: string, conversationIds: string[]): WorkspaceDateGroup => ({
+  key: `${workspace}::${date}`,
+  label: date,
+  time: 1,
   conversations: conversationIds.map((conversationId) => createConversation(conversationId)),
 });
 
-describe('buildVisibleConversationIds', () => {
-  it('keeps pinned conversations first and preserves rendered section order', () => {
-    const timelineSections: TimelineSection[] = [
-      {
-        timeline: 'Today',
-        items: [
-          {
-            type: 'conversation',
-            time: 3,
-            conversation: createConversation('direct-1'),
-          },
-          {
-            type: 'workspace',
-            time: 2,
-            workspaceGroup: createWorkspaceGroup('/workspace/project-a', ['ws-1', 'ws-2']),
-          },
-          {
-            type: 'conversation',
-            time: 1,
-            conversation: createConversation('direct-2'),
-          },
-        ],
-      },
-    ];
+const createWorkspaceHistoryGroup = (workspace: string, dates: Array<{ date: string; ids: string[] }>): WorkspaceHistoryGroup => ({
+  key: workspace,
+  workspace,
+  displayName: workspace,
+  isTemporaryBucket: false,
+  time: 1,
+  dateGroups: dates.map(({ date, ids }) => createDateGroup(workspace, date, ids)),
+});
 
+describe('buildVisibleConversationIds', () => {
+  it('keeps pinned conversations first and preserves rendered workspace/date order', () => {
     const visibleConversationIds = buildVisibleConversationIds({
       pinnedConversations: [createConversation('pinned-1'), createConversation('pinned-2')],
-      timelineSections,
+      workspaceGroups: [
+        createWorkspaceHistoryGroup('/workspace/project-a', [
+          { date: '2026-04-03', ids: ['ws-1', 'ws-2'] },
+          { date: '2026-04-02', ids: ['ws-3'] },
+        ]),
+      ],
       expandedWorkspaces: ['/workspace/project-a'],
       siderCollapsed: false,
     });
 
-    expect(visibleConversationIds).toEqual(['pinned-1', 'pinned-2', 'direct-1', 'ws-1', 'ws-2', 'direct-2']);
+    expect(visibleConversationIds).toEqual(['pinned-1', 'pinned-2', 'ws-1', 'ws-2', 'ws-3']);
   });
 
   it('skips conversations inside collapsed workspace groups', () => {
     const visibleConversationIds = buildVisibleConversationIds({
       pinnedConversations: [],
-      timelineSections: [
-        {
-          timeline: 'Today',
-          items: [
-            {
-              type: 'workspace',
-              time: 1,
-              workspaceGroup: createWorkspaceGroup('/workspace/project-a', ['ws-1', 'ws-2']),
-            },
-          ],
-        },
-      ],
+      workspaceGroups: [createWorkspaceHistoryGroup('/workspace/project-a', [{ date: '2026-04-03', ids: ['ws-1', 'ws-2'] }])],
       expandedWorkspaces: [],
       siderCollapsed: false,
     });
@@ -95,18 +76,7 @@ describe('buildVisibleConversationIds', () => {
   it('includes workspace conversations when the sidebar is collapsed', () => {
     const visibleConversationIds = buildVisibleConversationIds({
       pinnedConversations: [],
-      timelineSections: [
-        {
-          timeline: 'Today',
-          items: [
-            {
-              type: 'workspace',
-              time: 1,
-              workspaceGroup: createWorkspaceGroup('/workspace/project-a', ['ws-1', 'ws-2']),
-            },
-          ],
-        },
-      ],
+      workspaceGroups: [createWorkspaceHistoryGroup('/workspace/project-a', [{ date: '2026-04-03', ids: ['ws-1', 'ws-2'] }])],
       expandedWorkspaces: [],
       siderCollapsed: true,
     });

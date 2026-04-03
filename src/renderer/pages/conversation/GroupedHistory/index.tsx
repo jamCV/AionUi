@@ -39,8 +39,6 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
   const { t } = useTranslation();
   const { getJobStatus, markAsRead, setActiveConversation } = useCronJobsMap();
 
-  // Sync active conversation ref when route changes (for URL navigation)
-  // This doesn't trigger state update, avoiding double render
   useEffect(() => {
     if (id) {
       setActiveConversation(id);
@@ -52,10 +50,12 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
     isConversationGenerating,
     hasCompletionUnread,
     expandedWorkspaces,
+    expandedDateGroups,
     pinnedConversations,
     teamChildMap,
-    timelineSections,
+    workspaceGroups,
     handleToggleWorkspace,
+    handleToggleDateGroup,
   } = useConversations();
 
   const {
@@ -199,10 +199,9 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
     );
   };
 
-  // Collect all sortable IDs for the pinned section
   const pinnedIds = useMemo(() => pinnedConversations.map((c) => c.id), [pinnedConversations]);
 
-  if (timelineSections.length === 0 && pinnedConversations.length === 0) {
+  if (workspaceGroups.length === 0 && pinnedConversations.length === 0) {
     return (
       <FlexFullContainer>
         <div className='flex-center'>
@@ -402,45 +401,35 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
           </DragOverlay>
         </DndContext>
 
-        {timelineSections.map((section) => (
-          <div key={section.timeline} className='mb-8px min-w-0'>
-            {!collapsed && (
-              <div className='chat-history__section px-12px py-8px text-13px text-t-secondary font-bold'>
-                {section.timeline}
+        {workspaceGroups.map((workspaceGroup) => (
+          <div key={workspaceGroup.key} className={classNames('mb-8px min-w-0', { 'px-8px': !collapsed })}>
+            <WorkspaceCollapse
+              expanded={expandedWorkspaces.includes(workspaceGroup.key)}
+              onToggle={() => handleToggleWorkspace(workspaceGroup.key)}
+              siderCollapsed={collapsed}
+              header={
+                <div className='flex items-center gap-8px text-14px min-w-0'>
+                  <span className='font-medium truncate flex-1 text-t-primary min-w-0'>{workspaceGroup.displayName}</span>
+                </div>
+              }
+            >
+              <div className={classNames('flex flex-col gap-6px min-w-0', { 'mt-4px': !collapsed })}>
+                {workspaceGroup.dateGroups.map((dateGroup) => (
+                  <WorkspaceCollapse
+                    key={dateGroup.key}
+                    expanded={collapsed || expandedDateGroups.includes(dateGroup.key)}
+                    onToggle={() => handleToggleDateGroup(dateGroup.key)}
+                    siderCollapsed={collapsed}
+                    className='min-w-0'
+                    header={<div className='text-12px text-t-secondary font-medium min-w-0 truncate'>{dateGroup.label}</div>}
+                  >
+                    <div className='flex flex-col gap-2px min-w-0'>
+                      {dateGroup.conversations.map((conversation) => renderConversation(conversation))}
+                    </div>
+                  </WorkspaceCollapse>
+                ))}
               </div>
-            )}
-
-            {section.items.map((item) => {
-              if (item.type === 'workspace' && item.workspaceGroup) {
-                const group = item.workspaceGroup;
-                return (
-                  <div key={group.workspace} className={classNames('min-w-0', { 'px-8px': !collapsed })}>
-                    <WorkspaceCollapse
-                      expanded={expandedWorkspaces.includes(group.workspace)}
-                      onToggle={() => handleToggleWorkspace(group.workspace)}
-                      siderCollapsed={collapsed}
-                      header={
-                        <div className='flex items-center gap-8px text-14px min-w-0'>
-                          <span className='font-medium truncate flex-1 text-t-primary min-w-0'>
-                            {group.displayName}
-                          </span>
-                        </div>
-                      }
-                    >
-                      <div className={classNames('flex flex-col gap-2px min-w-0', { 'mt-4px': !collapsed })}>
-                        {group.conversations.map((conversation) => renderConversation(conversation))}
-                      </div>
-                    </WorkspaceCollapse>
-                  </div>
-                );
-              }
-
-              if (item.type === 'conversation' && item.conversation) {
-                return renderConversation(item.conversation);
-              }
-
-              return null;
-            })}
+            </WorkspaceCollapse>
           </div>
         ))}
       </div>

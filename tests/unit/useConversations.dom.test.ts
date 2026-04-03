@@ -8,9 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 import type { TChatConversation } from '../../src/common/config/storage';
-import type { TimelineSection } from '../../src/renderer/pages/conversation/GroupedHistory/types';
-
-// ── localStorage mock ────────────────────────────────────────────────────────
+import type { WorkspaceHistoryGroup } from '../../src/renderer/pages/conversation/GroupedHistory/types';
 
 const storageMap = new Map<string, string>();
 const localStorageMock = {
@@ -25,15 +23,12 @@ const localStorageMock = {
 };
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true, configurable: true });
 
-// ── Mocks ────────────────────────────────────────────────────────────────────
-
 vi.mock('react-router-dom', () => ({
   useParams: () => ({}),
 }));
 
-// Shared ref so the hoisted mock factory can read the latest value
 const testState = {
-  sections: [] as TimelineSection[],
+  workspaceGroups: [] as WorkspaceHistoryGroup[],
   conversations: [] as TChatConversation[],
 };
 
@@ -48,7 +43,7 @@ vi.mock('../../src/renderer/hooks/context/ConversationHistoryContext', () => ({
     setActiveConversation: mockSetActiveConversation,
     groupedHistory: {
       pinnedConversations: [],
-      timelineSections: testState.sections,
+      workspaceGroups: testState.workspaceGroups,
     },
   }),
 }));
@@ -70,30 +65,32 @@ vi.mock('../../src/renderer/pages/conversation/GroupedHistory/hooks/useConversat
 vi.mock('../../src/renderer/pages/conversation/GroupedHistory/utils/groupingHelpers', () => ({
   buildGroupedHistory: () => ({
     pinnedConversations: [],
-    timelineSections: testState.sections,
+    workspaceGroups: testState.workspaceGroups,
   }),
   getTeamParentConversationId: (conversation: TChatConversation) =>
     conversation.extra?.team?.role === 'subagent' ? conversation.extra.team.parentConversationId : undefined,
 }));
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 const STORAGE_KEY = 'aionui_workspace_expansion';
+const DATE_GROUP_STORAGE_KEY = 'aionui_date_group_expansion';
 
-const makeWorkspaceSection = (workspaces: string[]): TimelineSection[] => [
-  {
-    timeline: 'conversation.history.today',
-    items: workspaces.map((ws) => ({
-      type: 'workspace' as const,
-      time: Date.now(),
-      workspaceGroup: {
-        workspace: ws,
-        displayName: ws.split('/').pop()!,
+const makeWorkspaceGroups = (workspaces: string[]): WorkspaceHistoryGroup[] => {
+  return workspaces.map((workspace) => ({
+    key: workspace,
+    workspace,
+    displayName: workspace.split('/').pop()!,
+    isTemporaryBucket: false,
+    time: Date.now(),
+    dateGroups: [
+      {
+        key: `${workspace}::2026-04-03`,
+        label: '2026-04-03',
+        time: Date.now(),
         conversations: [],
       },
-    })),
-  },
-];
+    ],
+  }));
+};
 
 const makeConversation = (id: string, overrides?: Partial<TChatConversation>): TChatConversation =>
   ({
@@ -114,63 +111,92 @@ const makeConversation = (id: string, overrides?: Partial<TChatConversation>): T
     ...overrides,
   }) as TChatConversation;
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-
-// Import the hook statically since mocks are hoisted
 import { useConversations } from '../../src/renderer/pages/conversation/GroupedHistory/hooks/useConversations';
 
 describe('useConversations - workspace expansion', () => {
   beforeEach(() => {
     storageMap.clear();
-    testState.sections = [];
+    testState.workspaceGroups = [];
     testState.conversations = [];
     mockSetActiveConversation.mockReset();
   });
 
   it('should auto-expand all workspaces on first load when localStorage is empty', async () => {
-    testState.sections = makeWorkspaceSection(['/ws/a', '/ws/b']);
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a', '/ws/b']);
 
     const { result } = renderHook(() => useConversations());
     await act(async () => {});
 
     expect(result.current.expandedWorkspaces).toEqual(expect.arrayContaining(['/ws/a', '/ws/b']));
     expect(result.current.expandedWorkspaces).toHaveLength(2);
+    expect(result.current.expandedDateGroups).toEqual(
+      expect.arrayContaining(['/ws/a::2026-04-03', '/ws/b::2026-04-03'])
+    );
   });
 
   it('should restore expansion state from localStorage', async () => {
     storageMap.set(STORAGE_KEY, JSON.stringify(['/ws/a']));
-    testState.sections = makeWorkspaceSection(['/ws/a', '/ws/b']);
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a', '/ws/b']);
 
     const { result } = renderHook(() => useConversations());
     await act(async () => {});
 
-    // Should keep only the stored value, not auto-expand all
     expect(result.current.expandedWorkspaces).toEqual(['/ws/a']);
   });
 
   it('should toggle workspace expansion on handleToggleWorkspace', async () => {
-    testState.sections = makeWorkspaceSection(['/ws/a', '/ws/b']);
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a', '/ws/b']);
 
     const { result } = renderHook(() => useConversations());
     await act(async () => {});
     expect(result.current.expandedWorkspaces).toContain('/ws/a');
 
-    // Collapse /ws/a
     act(() => {
       result.current.handleToggleWorkspace('/ws/a');
     });
     expect(result.current.expandedWorkspaces).not.toContain('/ws/a');
     expect(result.current.expandedWorkspaces).toContain('/ws/b');
 
-    // Expand /ws/a again
     act(() => {
       result.current.handleToggleWorkspace('/ws/a');
     });
     expect(result.current.expandedWorkspaces).toContain('/ws/a');
   });
 
+  it('should toggle date group expansion on handleToggleDateGroup', async () => {
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a']);
+
+    const { result } = renderHook(() => useConversations());
+    await act(async () => {});
+    expect(result.current.expandedDateGroups).toContain('/ws/a::2026-04-03');
+
+    act(() => {
+      result.current.handleToggleDateGroup('/ws/a::2026-04-03');
+    });
+    expect(result.current.expandedDateGroups).not.toContain('/ws/a::2026-04-03');
+
+    act(() => {
+      result.current.handleToggleDateGroup('/ws/a::2026-04-03');
+    });
+    expect(result.current.expandedDateGroups).toContain('/ws/a::2026-04-03');
+  });
+
+  it('should persist date group expansion state to localStorage', async () => {
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a']);
+
+    const { result } = renderHook(() => useConversations());
+    await act(async () => {});
+
+    act(() => {
+      result.current.handleToggleDateGroup('/ws/a::2026-04-03');
+    });
+
+    const stored = JSON.parse(storageMap.get(DATE_GROUP_STORAGE_KEY)!);
+    expect(stored).toEqual([]);
+  });
+
   it('should persist expansion state to localStorage', async () => {
-    testState.sections = makeWorkspaceSection(['/ws/a', '/ws/b']);
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a', '/ws/b']);
 
     const { result } = renderHook(() => useConversations());
     await act(async () => {});
@@ -184,9 +210,8 @@ describe('useConversations - workspace expansion', () => {
   });
 
   it('should remove stale workspace entries from expandedWorkspaces', async () => {
-    // localStorage has a workspace that no longer exists in data
     storageMap.set(STORAGE_KEY, JSON.stringify(['/ws/a', '/ws/stale']));
-    testState.sections = makeWorkspaceSection(['/ws/a', '/ws/b']);
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a', '/ws/b']);
 
     const { result } = renderHook(() => useConversations());
     await act(async () => {});
@@ -196,18 +221,16 @@ describe('useConversations - workspace expansion', () => {
   });
 
   it('should not re-expand workspaces after user manually collapses all (#1156)', async () => {
-    testState.sections = makeWorkspaceSection(['/ws/a']);
+    testState.workspaceGroups = makeWorkspaceGroups(['/ws/a']);
 
     const { result } = renderHook(() => useConversations());
     await act(async () => {});
     expect(result.current.expandedWorkspaces).toEqual(['/ws/a']);
 
-    // User collapses the only workspace
     act(() => {
       result.current.handleToggleWorkspace('/ws/a');
     });
 
-    // Should stay collapsed, not re-expand
     expect(result.current.expandedWorkspaces).toEqual([]);
   });
 

@@ -34,6 +34,16 @@ vi.mock('@/common', () => ({
       askSideQuestion: mockProvider('conversation.askSideQuestion'),
       sendMessage: mockProvider('conversation.sendMessage'),
       confirmMessage: mockProvider('conversation.confirmMessage'),
+      turnSnapshot: {
+        list: mockProvider('conversation.turnSnapshot.list'),
+        get: mockProvider('conversation.turnSnapshot.get'),
+        keep: mockProvider('conversation.turnSnapshot.keep'),
+        revert: mockProvider('conversation.turnSnapshot.revert'),
+      },
+      team: {
+        getRunView: mockProvider('conversation.team.getRunView'),
+        listChildConversations: mockProvider('conversation.team.listChildConversations'),
+      },
       listChanged: { emit: vi.fn() },
       responseStream: { emit: vi.fn() },
       confirmation: {
@@ -55,6 +65,7 @@ vi.mock('@process/utils/initStorage', () => ({
   getSkillsDir: vi.fn(() => '/mock/skills'),
   getBuiltinSkillsCopyDir: vi.fn(() => '/mock/builtin-skills'),
   getSystemDir: vi.fn(() => ({ cacheDir: '/mock/cache' })),
+  ProcessConfig: { get: vi.fn(async () => undefined) },
   ProcessChat: { conversations: [] },
 }));
 
@@ -92,6 +103,7 @@ describe('conversationBridge.sendMessage', () => {
   const mockConversationService = {
     create: vi.fn(),
     getById: vi.fn(),
+    getConversation: vi.fn(async () => ({ id: 'missing-id', type: 'gemini', source: 'aionui', extra: {} })),
     remove: vi.fn(),
     update: vi.fn(),
     getAll: vi.fn(),

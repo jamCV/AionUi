@@ -5,16 +5,20 @@
  */
 
 import type { TChatConversation } from '@/common/config/storage';
-import { getActivityTime, getTimelineLabel } from '@/renderer/utils/chat/timeline';
+import { getActivityTime } from '@/renderer/utils/chat/timeline';
 import { getWorkspaceDisplayName } from '@/renderer/utils/workspace/workspace';
-import { getWorkspaceUpdateTime } from '@/renderer/utils/workspace/workspaceHistory';
 
-import type { GroupedHistoryResult, TimelineItem, TimelineSection, WorkspaceGroup } from '../types';
+import type { GroupedHistoryResult, WorkspaceDateGroup, WorkspaceHistoryGroup } from '../types';
 import { getConversationSortOrder } from './sortOrderHelpers';
 
-export const getConversationTimelineLabel = (conversation: TChatConversation, t: (key: string) => string): string => {
-  const time = getActivityTime(conversation);
-  return getTimelineLabel(time, Date.now(), t);
+const TEMPORARY_BUCKET_KEY = '__temporary_workspace_bucket__';
+
+const formatDateKey = (timestamp: number): string => {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 export const isConversationPinned = (conversation: TChatConversation): boolean => {
@@ -43,99 +47,65 @@ export const getConversationPinnedAt = (conversation: TChatConversation): number
   return 0;
 };
 
-export const groupConversationsByTimelineAndWorkspace = (
+const buildWorkspaceGroups = (
   conversations: TChatConversation[],
   t: (key: string) => string
-): TimelineSection[] => {
-  const allWorkspaceGroups = new Map<string, TChatConversation[]>();
-  const withoutWorkspaceConvs: TChatConversation[] = [];
+): WorkspaceHistoryGroup[] => {
+  const workspaces = new Map<string, TChatConversation[]>();
 
-  conversations.forEach((conv) => {
-    const workspace = conv.extra?.workspace;
-    const customWorkspace = conv.extra?.customWorkspace;
-
-    if (customWorkspace && workspace) {
-      if (!allWorkspaceGroups.has(workspace)) {
-        allWorkspaceGroups.set(workspace, []);
-      }
-      allWorkspaceGroups.get(workspace)!.push(conv);
-    } else {
-      withoutWorkspaceConvs.push(conv);
-    }
+  conversations.forEach((conversation) => {
+    const workspace = conversation.extra?.workspace;
+    const customWorkspace = conversation.extra?.customWorkspace;
+    const workspaceKey = customWorkspace && workspace ? workspace : TEMPORARY_BUCKET_KEY;
+    const list = workspaces.get(workspaceKey) ?? [];
+    list.push(conversation);
+    workspaces.set(workspaceKey, list);
   });
 
-  const workspaceGroupsByTimeline = new Map<string, WorkspaceGroup[]>();
-
-  allWorkspaceGroups.forEach((convList, workspace) => {
-    const sortedConvs = [...convList].toSorted((a, b) => getActivityTime(b) - getActivityTime(a));
-    const latestConv = sortedConvs[0];
-    const timeline = getConversationTimelineLabel(latestConv, t);
-
-    if (!workspaceGroupsByTimeline.has(timeline)) {
-      workspaceGroupsByTimeline.set(timeline, []);
-    }
-
-    workspaceGroupsByTimeline.get(timeline)!.push({
-      workspace,
-      displayName: getWorkspaceDisplayName(workspace),
-      conversations: sortedConvs,
-    });
-  });
-
-  const withoutWorkspaceByTimeline = new Map<string, TChatConversation[]>();
-
-  withoutWorkspaceConvs.forEach((conv) => {
-    const timeline = getConversationTimelineLabel(conv, t);
-    if (!withoutWorkspaceByTimeline.has(timeline)) {
-      withoutWorkspaceByTimeline.set(timeline, []);
-    }
-    withoutWorkspaceByTimeline.get(timeline)!.push(conv);
-  });
-
-  const timelineOrder = [
-    'conversation.history.today',
-    'conversation.history.yesterday',
-    'conversation.history.recent7Days',
-    'conversation.history.earlier',
-  ];
-  const sections: TimelineSection[] = [];
-
-  timelineOrder.forEach((timelineKey) => {
-    const timeline = t(timelineKey);
-    const withWorkspace = workspaceGroupsByTimeline.get(timeline) || [];
-    const withoutWorkspace = withoutWorkspaceByTimeline.get(timeline) || [];
-
-    if (withWorkspace.length === 0 && withoutWorkspace.length === 0) return;
-
-    const items: TimelineItem[] = [];
-
-    withWorkspace.forEach((group) => {
-      const updateTime = getWorkspaceUpdateTime(group.workspace);
-      const time = updateTime > 0 ? updateTime : getActivityTime(group.conversations[0]);
-      items.push({
-        type: 'workspace',
-        time,
-        workspaceGroup: group,
+  return [...workspaces.entries()]
+    .map(([workspaceKey, workspaceConversations]) => {
+      const sortedConversations = [...workspaceConversations].toSorted((left, right) => {
+        return getActivityTime(right) - getActivityTime(left);
       });
-    });
+      const dateGroupsMap = new Map<string, TChatConversation[]>();
 
-    withoutWorkspace.forEach((conv) => {
-      items.push({
-        type: 'conversation',
-        time: getActivityTime(conv),
-        conversation: conv,
+      sortedConversations.forEach((conversation) => {
+        const dateKey = formatDateKey(getActivityTime(conversation));
+        const list = dateGroupsMap.get(dateKey) ?? [];
+        list.push(conversation);
+        dateGroupsMap.set(dateKey, list);
       });
-    });
 
-    items.sort((a, b) => b.time - a.time);
+      const dateGroups: WorkspaceDateGroup[] = [...dateGroupsMap.entries()]
+        .map(([dateKey, dateConversations]) => {
+          const sortedDateConversations = [...dateConversations].toSorted((left, right) => {
+            return getActivityTime(right) - getActivityTime(left);
+          });
 
-    sections.push({
-      timeline,
-      items,
-    });
-  });
+          return {
+            key: `${workspaceKey}::${dateKey}`,
+            label: dateKey,
+            time: getActivityTime(sortedDateConversations[0]),
+            conversations: sortedDateConversations,
+          };
+        })
+        .toSorted((left, right) => right.time - left.time);
 
-  return sections;
+      const isTemporaryBucket = workspaceKey === TEMPORARY_BUCKET_KEY;
+      const displayName = isTemporaryBucket
+        ? t('conversation.history.temporaryWorkspaceGroup')
+        : getWorkspaceDisplayName(workspaceKey, t);
+
+      return {
+        key: workspaceKey,
+        workspace: workspaceKey,
+        displayName,
+        isTemporaryBucket,
+        time: dateGroups[0]?.time ?? 0,
+        dateGroups,
+      };
+    })
+    .toSorted((left, right) => right.time - left.time);
 };
 
 export const buildGroupedHistory = (
@@ -163,6 +133,6 @@ export const buildGroupedHistory = (
 
   return {
     pinnedConversations,
-    timelineSections: groupConversationsByTimelineAndWorkspace(normalConversations, t),
+    workspaceGroups: buildWorkspaceGroups(normalConversations, t),
   };
 };
