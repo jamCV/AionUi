@@ -31,8 +31,10 @@ import MessageToolCall from './components/MessageToolCall';
 import MessageToolGroup from './components/MessageToolGroup';
 import MessageToolGroupSummary from './components/MessageToolGroupSummary';
 import MessageText from './components/MessagetText';
+import MessageThinking from './components/MessageThinking';
 import type { WriteFileResult } from './types';
 import { useAutoScroll } from './useAutoScroll';
+import { useAutoPreviewOfficeFiles } from '@/renderer/hooks/file/useAutoPreviewOfficeFiles';
 
 const LOAD_MORE_HEADER_HEIGHT = 56;
 
@@ -130,6 +132,8 @@ const MessageItem: React.FC<{ message: TMessage; highlighted?: boolean }> = Reac
         return <MessageCodexToolCall message={message}></MessageCodexToolCall>;
       case 'plan':
         return <MessagePlan message={message}></MessagePlan>;
+      case 'thinking':
+        return <MessageThinking message={message}></MessageThinking>;
       case 'available_commands':
         return null;
       default:
@@ -172,6 +176,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
   const list = useMessageList();
   const { hasOlder, isInitialLoading, isLoadingOlder, loadOlder } = useConversationMessagePagination();
   const conversationContext = useConversationContextSafe();
+  useAutoPreviewOfficeFiles(conversationContext?.workspace);
   const { t } = useTranslation();
   const location = useLocation();
   const locationState = (location.state || {}) as ConversationLocationState;
@@ -428,7 +433,7 @@ const MessageList: React.FC<{ className?: string }> = () => {
               `${firstItemIndex + index}-${getProcessedItemAnchorId(item as IMessageVO)}`
             }
             atBottomThreshold={100}
-            increaseViewportBy={{ top: LOAD_MORE_HEADER_HEIGHT, bottom: 200 }}
+            increaseViewportBy={{ top: LOAD_MORE_HEADER_HEIGHT, bottom: 800 }}
             itemContent={renderItem}
             followOutput={handleFollowOutput}
             onScroll={handleScroll}

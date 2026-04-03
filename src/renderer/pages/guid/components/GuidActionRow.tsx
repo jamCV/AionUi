@@ -12,7 +12,7 @@ import { getCleanFileNames, FileService, MAX_UPLOAD_SIZE_MB } from '@/renderer/s
 import { iconColors } from '@/renderer/styles/colors';
 import { isElectronDesktop } from '@/renderer/utils/platform';
 import type { AcpBackend, AcpBackendConfig, AvailableAgent } from '../types';
-import PresetAgentTag from './PresetAgentTag';
+import PresetAgentTag, { type AgentSwitcherItem } from './PresetAgentTag';
 import { Button, Dropdown, Menu, Message, Tooltip } from '@arco-design/web-react';
 import { ArrowUp, FolderOpen, Plus, Shield, UploadOne } from '@icon-park/react';
 import React, { useCallback, useRef, useState } from 'react';
@@ -40,10 +40,15 @@ type GuidActionRowProps = {
   customAgents: AcpBackendConfig[];
   localeKey: string;
   onClosePresetTag: () => void;
+  agentLogo?: string | null;
+  agentSwitcherItems?: AgentSwitcherItem[];
+  onAgentSwitch?: (key: string) => void;
+  hidePresetTag?: boolean;
 
   // Send button
   loading: boolean;
   isButtonDisabled: boolean;
+  speechInputNode?: React.ReactNode;
   onSend: () => void;
 };
 
@@ -61,8 +66,13 @@ const GuidActionRow: React.FC<GuidActionRowProps> = ({
   customAgents,
   localeKey,
   onClosePresetTag,
+  agentLogo,
+  agentSwitcherItems,
+  onAgentSwitch,
+  hidePresetTag = false,
   loading,
   isButtonDisabled,
+  speechInputNode,
   onSend,
 }) => {
   const { t } = useTranslation();
@@ -108,11 +118,7 @@ const GuidActionRow: React.FC<GuidActionRowProps> = ({
   const getModeDisplayLabel = (mode: AgentModeOption): string =>
     t(`agentMode.${mode.value}`, { defaultValue: mode.label });
 
-  const permissionLabel = currentModeOption
-    ? isMobile
-      ? getModeDisplayLabel(currentModeOption)
-      : `${t('agentMode.permission')} · ${getModeDisplayLabel(currentModeOption)}`
-    : t('agentMode.permission');
+  const permissionLabel = currentModeOption ? getModeDisplayLabel(currentModeOption) : t('agentMode.permission');
 
   const isWebUI = !isElectronDesktop();
 
@@ -232,16 +238,22 @@ const GuidActionRow: React.FC<GuidActionRowProps> = ({
           )}
         </div>
 
-        {isPresetAgent && selectedAgentInfo && (
-          <PresetAgentTag
-            agentInfo={selectedAgentInfo}
-            customAgents={customAgents}
-            localeKey={localeKey}
-            onClose={onClosePresetTag}
-          />
+        {!hidePresetTag && isPresetAgent && selectedAgentInfo && (
+          <div className={styles.actionPresetAgent}>
+            <PresetAgentTag
+              agentInfo={selectedAgentInfo}
+              customAgents={customAgents}
+              localeKey={localeKey}
+              onClose={onClosePresetTag}
+              agentLogo={agentLogo}
+              agentSwitcherItems={agentSwitcherItems}
+              onAgentSwitch={onAgentSwitch}
+            />
+          </div>
         )}
       </div>
       <div className={styles.actionSubmit}>
+        {speechInputNode}
         <Button
           shape='circle'
           type='primary'

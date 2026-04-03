@@ -23,6 +23,7 @@ import { computeOpenClawIdentityHash } from '@process/utils/openclawUtils';
 import { turnSnapshotCoordinator } from './services/TurnSnapshotCoordinator';
 import { turnSnapshotService } from './services/TurnSnapshotService';
 import { migrateConversationToDatabase } from './migrationUtils';
+import { ConversationSideQuestionService } from './services/ConversationSideQuestionService';
 
 const refreshTrayMenuSafely = async (): Promise<void> => {
   try {
@@ -51,10 +52,21 @@ const resolveTurnBackend = (conversation: TChatConversation | undefined, task: I
 const isFailedSendResult = (result: unknown): result is { success: false } =>
   !!result && typeof result === 'object' && 'success' in result && result.success === false;
 
+const VALID_CONVERSATION_TYPES = new Set<TChatConversation['type']>([
+  'gemini',
+  'acp',
+  'codex',
+  'openclaw-gateway',
+  'nanobot',
+  'remote',
+]);
+
 export function initConversationBridge(
   conversationService: IConversationService,
   workerTaskManager: IWorkerTaskManager
 ): void {
+  const sideQuestionService = new ConversationSideQuestionService(conversationService);
+
   const emitConversationListChanged = (
     conversation: Pick<TChatConversation, 'id' | 'source'>,
     action: 'created' | 'updated' | 'deleted'
@@ -122,6 +134,10 @@ export function initConversationBridge(
   });
 
   ipcBridge.conversation.create.provider(async (params): Promise<TChatConversation> => {
+    if (!VALID_CONVERSATION_TYPES.has(params?.type as TChatConversation['type'])) {
+      console.warn('[conversationBridge] Rejecting create request with invalid conversation type:', params?.type);
+      return undefined as unknown as TChatConversation;
+    }
     const conversation = await conversationService.createConversation({
       ...params,
       source: 'aionui', // Mark conversations created by AionUI as aionui
@@ -368,7 +384,7 @@ export function initConversationBridge(
         if (modelChanged) {
           try {
             workerTaskManager.kill(id);
-          } catch (killErr) {
+          } catch {
             // ignore kill error, will lazily rebuild later
           }
         }
@@ -515,9 +531,32 @@ export function initConversationBridge(
     }
   });
 
+  ipcBridge.conversation.askSideQuestion.provider(async ({ conversation_id, question }) => {
+    try {
+      const result = await sideQuestionService.ask(conversation_id, question);
+      return {
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      console.error('[conversationBridge] /btw request failed', {
+        conversationId: conversation_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        success: false,
+        msg: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   // 通用 sendMessage 实现 - 统一调用 IAgentManager.sendMessage
   // Generic sendMessage - dispatches via IAgentManager.sendMessage interface
-  ipcBridge.conversation.sendMessage.provider(async ({ conversation_id, files, ...other }) => {
+  ipcBridge.conversation.sendMessage.provider(async (params) => {
+    if (!params) {
+      return { success: false, msg: 'Missing request parameters' };
+    }
+    const { conversation_id, files, ...other } = params;
     let task: IAgentManager | undefined;
     const conversation = await conversationService.getConversation(conversation_id);
     try {

@@ -1,13 +1,21 @@
 import { ipcBridge } from '@/common';
 import type { AcpBackend } from '@/common/types/acpTypes';
+import { isSideQuestionSupported } from '@/common/chat/sideQuestion';
 import { uuid } from '@/common/utils';
 import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';
 import SendBox from '@/renderer/components/chat/sendbox';
 import TeamDelegationBadge from '@/renderer/components/chat/TeamDelegationBadge';
 import ThoughtDisplay from '@/renderer/components/chat/ThoughtDisplay';
+import CommandQueuePanel from '@/renderer/components/chat/CommandQueuePanel';
 import { getSendBoxDraftHook, type FileOrFolderItem } from '@/renderer/hooks/chat/useSendBoxDraft';
 import { createSetUploadFile, useSendBoxFiles } from '@/renderer/hooks/chat/useSendBoxFiles';
 import { useAddOrUpdateMessage } from '@/renderer/pages/conversation/Messages/hooks';
+import {
+  shouldEnqueueConversationCommand,
+  useConversationCommandQueue,
+  type ConversationCommandQueueItem,
+} from '@/renderer/pages/conversation/platforms/useConversationCommandQueue';
+import { assertBridgeSuccess } from '@/renderer/pages/conversation/platforms/assertBridgeSuccess';
 import { allSupportedExts } from '@/renderer/services/FileService';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { mergeFileSelectionItems } from '@/renderer/utils/file/fileSelection';
@@ -80,8 +88,18 @@ const AcpSendBox: React.FC<{
   sessionMode?: string;
   agentName?: string;
 }> = ({ conversation_id, backend, sessionMode, agentName }) => {
-  const { thought, running, acpStatus, aiProcessing, setAiProcessing, resetState, tokenUsage, contextLimit } =
-    useAcpMessage(conversation_id);
+  const {
+    thought,
+    running,
+    hasHydratedRunningState,
+    acpStatus,
+    aiProcessing,
+    setAiProcessing,
+    resetState,
+    tokenUsage,
+    contextLimit,
+    hasThinkingMessage,
+  } = useAcpMessage(conversation_id);
   const { t } = useTranslation();
   const { checkAndUpdateTitle } = useAutoTitle();
   const slashCommands = useSlashCommands(conversation_id, { agentStatus: acpStatus });
@@ -117,6 +135,7 @@ const AcpSendBox: React.FC<{
     setAtPath,
     setUploadFile,
   });
+  const isBusy = running || aiProcessing;
 
   // Register handler for adding text from preview panel to sendbox
   useEffect(() => {
@@ -146,22 +165,88 @@ const AcpSendBox: React.FC<{
     addOrUpdateMessage: addOrUpdateMessageRef.current,
   });
 
+  const executeCommand = useCallback(
+    async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {
+      const msg_id = uuid();
+
+      setAiProcessing(true);
+
+      try {
+        void checkAndUpdateTitle(conversation_id, input);
+        const result = await ipcBridge.acpConversation.sendMessage.invoke({
+          input,
+          msg_id,
+          conversation_id,
+          files,
+        });
+        assertBridgeSuccess(result, `Failed to send message to ${backend}`);
+        emitter.emit('chat.history.refresh');
+      } catch (error: unknown) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const isAuthError =
+          errorMsg.includes('[ACP-AUTH-') ||
+          errorMsg.includes('authentication failed') ||
+          errorMsg.includes('认证失败');
+        if (isAuthError) {
+          const errorMessage = {
+            id: uuid(),
+            msg_id: uuid(),
+            conversation_id,
+            type: 'error',
+            data: t('acp.auth.failed', {
+              backend,
+              error: errorMsg,
+              defaultValue: `${backend} authentication failed:
+
+{{error}}
+
+Please check your local CLI tool authentication status`,
+            }),
+          };
+
+          ipcBridge.acpConversation.responseStream.emit(errorMessage);
+        }
+
+        setAiProcessing(false);
+        throw error;
+      }
+
+      if (files.length > 0) {
+        emitter.emit('acp.workspace.refresh');
+      }
+    },
+    [backend, checkAndUpdateTitle, conversation_id, setAiProcessing, t]
+  );
+
+  const {
+    items: queuedCommands,
+    isPaused: isQueuePaused,
+    isInteractionLocked: isQueueInteractionLocked,
+    hasPendingCommands,
+    enqueue,
+    update,
+    remove,
+    clear,
+    reorder,
+    pause,
+    resume,
+    lockInteraction,
+    unlockInteraction,
+    resetActiveExecution,
+  } = useConversationCommandQueue({
+    conversationId: conversation_id,
+    isBusy,
+    isHydrated: hasHydratedRunningState,
+    onExecute: executeCommand,
+  });
+
   const onSendHandler = async (message: string) => {
     const msg_id = uuid();
-
-    // ACP: don't use buildDisplayMessage, pass raw message directly
-    // File references are added by the backend ACP agent (using actual copied paths)
-    // Avoid two inconsistent sets of file references causing Claude to read wrong files
-
-    // Merge uploadFile and atPath (workspace selected files)
     const atPathFiles = atPath.map((item) => (typeof item === 'string' ? item : item.path));
     const allFiles = [...uploadFile, ...atPathFiles];
 
-    // Content is already cleared by the shared SendBox component (setInput(''))
-    // before calling onSend — no need to clear again here.
     clearFiles();
 
-    // Start AI processing loading state
     if (teamDelegation.selectedAssistant) {
       const result = await ipcBridge.conversation.team.delegateFromUser.invoke({
         conversation_id,
@@ -184,55 +269,15 @@ const AcpSendBox: React.FC<{
       }
       return;
     }
-    setAiProcessing(true);
 
-    // Send message via ACP
-    try {
-      await ipcBridge.acpConversation.sendMessage.invoke({
-        input: message,
-        msg_id,
-        conversation_id,
-        files: allFiles,
-      });
-      void checkAndUpdateTitle(conversation_id, message);
-      emitter.emit('chat.history.refresh');
-    } catch (error: unknown) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      // Check if it's an ACP authentication error
-      const isAuthError =
-        errorMsg.includes('[ACP-AUTH-') || errorMsg.includes('authentication failed') || errorMsg.includes('认证失败');
-
-      if (isAuthError) {
-        // Create error message in conversation instead of alert
-        const errorMessage = {
-          id: uuid(),
-          msg_id: uuid(),
-          conversation_id,
-          type: 'error',
-          data: t('acp.auth.failed', {
-            backend,
-            error: errorMsg,
-            defaultValue: `${backend} authentication failed:\n\n{{error}}\n\nPlease check your local CLI tool authentication status`,
-          }),
-        };
-
-        // Add error message to conversation
-        ipcBridge.acpConversation.responseStream.emit(errorMessage);
-
-        // Stop loading state since AI won't respond
-        setAiProcessing(false);
-        return; // Don't re-throw error, just show the message
-      }
-      // Stop loading state for other errors too
-      setAiProcessing(false);
-      throw error;
-    }
-
-    // Clear selected files (similar to GeminiSendBox)
     emitter.emit('acp.selected.file.clear');
-    if (allFiles.length) {
-      emitter.emit('acp.workspace.refresh');
+
+    if (shouldEnqueueConversationCommand({ isBusy, hasPendingCommands })) {
+      enqueue({ input: message, files: allFiles });
+      return;
     }
+
+    await executeCommand({ input: message, files: allFiles });
   };
 
   const appendSelectedFiles = useCallback(
@@ -246,8 +291,8 @@ const AcpSendBox: React.FC<{
   });
 
   useAddEventListener('acp.selected.file', setAtPath);
-  useAddEventListener('acp.selected.file.append', (items: Array<string | FileOrFolderItem>) => {
-    const merged = mergeFileSelectionItems(atPathRef.current, items);
+  useAddEventListener('acp.selected.file.append', (selectedItems: Array<string | FileOrFolderItem>) => {
+    const merged = mergeFileSelectionItems(atPathRef.current, selectedItems);
     if (merged !== atPathRef.current) {
       setAtPath(merged as Array<string | FileOrFolderItem>);
     }
@@ -260,13 +305,27 @@ const AcpSendBox: React.FC<{
       await ipcBridge.conversation.stop.invoke({ conversation_id });
     } finally {
       resetState();
+      resetActiveExecution('stop');
     }
   };
 
   return (
     <div className='max-w-800px w-full mx-auto flex flex-col mt-auto mb-16px'>
-      <ThoughtDisplay thought={thought} running={running || aiProcessing} onStop={handleStop} />
+      <ThoughtDisplay thought={thought} running={(running || aiProcessing) && !hasThinkingMessage} onStop={handleStop} />
       <TurnSummaryPanel conversationId={conversation_id} />
+      <CommandQueuePanel
+        items={queuedCommands}
+        paused={isQueuePaused}
+        interactionLocked={isQueueInteractionLocked}
+        onPause={pause}
+        onResume={resume}
+        onInteractionLock={lockInteraction}
+        onInteractionUnlock={unlockInteraction}
+        onUpdate={(commandId, input) => update(commandId, { input })}
+        onReorder={reorder}
+        onRemove={remove}
+        onClear={clear}
+      />
 
       <SendBox
         value={content}
@@ -288,7 +347,7 @@ const AcpSendBox: React.FC<{
             />
           ) : null
         }
-        loading={running || aiProcessing}
+        loading={isBusy}
         disabled={false}
         placeholder={t('acp.sendbox.placeholder', {
           backend: agentName || backend,
@@ -297,6 +356,8 @@ const AcpSendBox: React.FC<{
         onStop={handleStop}
         className='z-10'
         onFilesAdded={handleFilesAdded}
+        hasPendingAttachments={uploadFile.length > 0 || atPath.length > 0}
+        enableBtw={isSideQuestionSupported({ type: 'acp', backend })}
         supportedExts={allSupportedExts}
         defaultMultiLine={true}
         lockMultiLine={true}
@@ -386,6 +447,7 @@ const AcpSendBox: React.FC<{
         onSend={onSendHandler}
         slashCommands={slashCommands}
         onSlashBuiltinCommand={onSlashBuiltinCommand}
+        allowSendWhileLoading
         sendButtonPrefix={
           tokenUsage ? (
             <ContextUsageIndicator

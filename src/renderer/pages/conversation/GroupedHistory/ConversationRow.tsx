@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TChatConversation } from '@/common/config/storage';
 import { getAgentLogo } from '@/renderer/utils/model/agentLogo';
 import FlexFullContainer from '@/renderer/components/layout/FlexFullContainer';
 import { usePresetAssistantInfo } from '@/renderer/hooks/agent/usePresetAssistantInfo';
@@ -89,6 +88,16 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
     onConversationClick(conversation);
   };
 
+  const handleRowContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cleanupSiderTooltips();
+    if (batchMode) {
+      return;
+    }
+    onOpenMenu(conversation);
+  };
+
   const renderCompletionUnreadDot = () => {
     if (batchMode || !hasCompletionUnread || isGenerating) {
       return null;
@@ -106,7 +115,8 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
       <div
         id={'c-' + conversation.id}
         className={classNames(
-          'chat-history__item px-12px py-8px rd-8px flex justify-start items-center group cursor-pointer relative overflow-hidden shrink-0 conversation-item [&.conversation-item+&.conversation-item]:mt-2px min-w-0 transition-colors',
+          'chat-history__item py-8px rd-8px flex items-center group cursor-pointer relative overflow-hidden shrink-0 conversation-item [&.conversation-item+&.conversation-item]:mt-2px min-w-0 transition-colors',
+          collapsed ? 'justify-center px-0' : 'justify-start px-12px',
           {
             'hover:bg-[rgba(var(--primary-6),0.14)]': !batchMode,
             '!bg-active': selected,
@@ -114,6 +124,7 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
           }
         )}
         onClick={handleRowClick}
+        onContextMenu={handleRowContextMenu}
       >
         {batchMode && (
           <span

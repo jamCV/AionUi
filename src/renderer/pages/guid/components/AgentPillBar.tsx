@@ -54,7 +54,9 @@ const AgentPillBar: React.FC<AgentPillBarProps> = ({
         }}
       >
         {availableAgents
-          .filter((agent) => agent.backend !== 'custom' || agent.isExtension)
+          .filter(
+            (agent) => agent.backend !== 'custom' || agent.isExtension || (agent.customAgentId && !agent.isPreset)
+          )
           .map((agent, index) => {
             const isSelected = selectedAgentKey === getAgentKey(agent);
             const extensionAvatar = resolveExtensionAssetUrl(agent.isExtension ? agent.avatar : undefined);
@@ -114,8 +116,8 @@ const AgentPillBar: React.FC<AgentPillBarProps> = ({
         <Tooltip content={t('settings.agentManagement.connectRemoteAgent')}>
           <div
             className='flex items-center justify-center cursor-pointer p-4px opacity-60 hover:opacity-100 self-center'
-            style={{ transition: 'opacity 0.2s ease', flexShrink: 0, marginTop: 2 }}
-            onClick={() => navigate('/settings/agent')}
+            style={{ transition: 'opacity 0.2s ease', flexShrink: 0, marginTop: 4 }}
+            onClick={() => navigate('/settings/agent?tab=remote')}
           >
             <Plus theme='outline' size={20} fill='currentColor' style={{ flexShrink: 0 }} />
           </div>

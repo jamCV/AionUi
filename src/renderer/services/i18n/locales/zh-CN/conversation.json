@@ -71,6 +71,7 @@
   "historySearch": {
     "tooltip": "检索会话",
     "title": "检索会话内容",
+    "shortTitle": "搜索",
     "description": "输入关键词搜索历史消息，支持分页加载并跳转到对应消息。",
     "placeholder": "搜索消息内容...",
     "idle": "输入关键词检索历史消息",
@@ -158,6 +159,27 @@
       "download": "下载",
       "downloadSuccess": "下载成功",
       "downloadFailed": "下载失败"
+    },
+    "changes": {
+      "tab": "变更",
+      "filesTab": "文件",
+      "summary": "{{count}} 个文件已变更",
+      "insertions": "+{{count}} 行新增",
+      "deletions": "-{{count}} 行删除",
+      "empty": "暂无变更",
+      "emptyDescription": "AI 修改文件后，变更记录将显示在此处",
+      "refresh": "刷新",
+      "staged": "已暂存的更改",
+      "unstaged": "更改",
+      "changedFiles": "已更改的文件",
+      "stage": "暂存",
+      "stageAll": "暂存所有更改",
+      "unstage": "取消暂存",
+      "unstageAll": "取消暂存所有更改",
+      "discard": "放弃更改",
+      "reset": "还原更改",
+      "noUnstaged": "没有未暂存的更改",
+      "noStaged": "没有已暂存的更改"
     }
   },
   "minimap": {
@@ -181,7 +203,60 @@
     "confirmationLoadError": "确认对话框加载失败",
     "tryAnotherAgent": "尝试其他 Agent：",
     "switchedToAgent": "已切换到 {{agent}}",
-    "switchAgentFailed": "切换 Agent 失败"
+    "switchAgentFailed": "切换 Agent 失败",
+    "speech": {
+      "recordTooltip": "开始语音输入",
+      "pickFileTooltip": "选择音频文件",
+      "stopTooltip": "停止录音",
+      "processing": "正在转写音频...",
+      "unsupported": "当前环境不支持语音输入",
+      "startShort": "语音",
+      "stopShort": "停止",
+      "transcribingShort": "...",
+      "audioCaptureError": "未检测到可用麦克风",
+      "fileTooLarge": "音频文件过大",
+      "networkError": "音频转写时网络异常",
+      "notConfigured": "语音转文字尚未配置",
+      "permissionDenied": "麦克风权限被拒绝",
+      "recordingUnsupported": "当前环境不支持直接录音，请改为上传音频文件",
+      "transcriptionFailed": "音频转写失败",
+      "genericError": "语音输入失败，请重试"
+    }
+  },
+  "sideQuestion": {
+    "title": "顺便问一下",
+    "description": "针对当前对话快速提一个小问题",
+    "started": "正在发起顺便提问...",
+    "answered": "顺便提问已返回结果。",
+    "noAnswer": "当前会话里没有明确的答案。",
+    "loading": "思考中...",
+    "parentTaskRunning": "主任务仍在后台继续运行。",
+    "dismissHint": "按 Escape、Enter 或 Space 关闭",
+    "unsupported": "当前会话暂不支持顺便提问。",
+    "alreadyRunning": "已有一个顺便提问正在进行中。",
+    "attachmentsNotAllowed": "顺便提问不能附带文件或 DOM 片段。",
+    "emptyQuestion": "请在 /btw 后输入问题。",
+    "toolsRequired": "/btw 只能根据当前对话中已有的内容作答，无法搜索、浏览或获取新信息。",
+    "error": "顺便提问失败。"
+  },
+  "commandQueue": {
+    "title": "排队指令",
+    "clear": "清空队列",
+    "edit": "编辑",
+    "editing": "编辑中",
+    "editPlaceholder": "可以在执行前先修改这条排队指令。",
+    "cancelEdit": "取消",
+    "saveEdit": "保存",
+    "moreActions": "更多操作",
+    "reorder": "拖动以调整排队指令顺序",
+    "remove": "移除",
+    "files": "{{count}} 个文件",
+    "pausedAfterFailure": "下一条排队指令启动失败。请编辑、调整顺序或移除后再继续。",
+    "emptyInput": "排队指令不能为空。",
+    "queueFull": "队列已满，请先移除部分指令再继续添加。",
+    "inputTooLong": "排队指令内容过长，请缩短后再发送。",
+    "tooManyFiles": "这条排队指令附加的文件过多。",
+    "queueTooLarge": "队列数据过大，无法安全缓存，请先移除部分排队指令。"
   },
   "contextUsage": {
     "contextUsed": "上下文已使用"

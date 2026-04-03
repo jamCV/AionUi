@@ -49,6 +49,38 @@ git branch --show-current
 
 If working directory is dirty, **STOP** and ask user to commit or stash first.
 
+#### Step 1.1b: Load Skip List (Daemon Mode Only)
+
+In daemon mode (`limit > 0`), load the skip list to avoid re-analyzing issues that were already
+triaged in previous sessions. The skip list is stored at:
+
+```
+~/.aionui-fix-sentry/skip-list.json
+```
+
+Format:
+
+```json
+{
+  "ELECTRON-6X": { "reason": "already_fixed", "expires": "2026-03-28T03:00:00Z", "summary": "PR #1758 merged" },
+  "ELECTRON-A7": { "reason": "system_level", "expires": "2026-04-03T03:00:00Z", "summary": "EPIPE in net.Socket" }
+}
+```
+
+**On load:**
+
+1. Read the file (if it doesn't exist, start with an empty skip list)
+2. Remove all entries where `expires` < current time (expired entries get re-analyzed)
+3. Keep the remaining entries as the active skip list
+
+**During Phase 1.2 (Fetch Issues):**
+
+When iterating through fetched issues, if an issue's short ID (e.g., `ELECTRON-6X`) is in the
+active skip list, **skip it immediately** without calling `get_issue_details` or doing any analysis.
+Log the skip: `Skipping ELECTRON-6X (cached: already_fixed — PR #1758 merged)`
+
+**In batch mode (`limit=0`):** skip list is ignored — always analyze everything fresh.
+
 #### Step 1.2: Fetch Unresolved Issues
 
 **Always include `is:unresolved`** to exclude issues already marked as resolved in Sentry.
@@ -276,25 +308,50 @@ and the testing skill — do not skip it.
 
 #### Step 2.4: Quality Checks
 
-Run quality checks with fallback commands. Some projects use `bun run` scripts,
-others need direct `npx`/`bunx` invocation. Try the script first, fall back to direct invocation.
+Run all checks in order. **Every check must pass before proceeding to Step 2.6.**
 
 ```bash
-# Lint — try script first, fall back to npx
-bun run lint:fix 2>/dev/null || npx oxlint --fix
+# 1. Lint + auto-fix
+bun run lint:fix
 
-# Format — try script first, fall back to npx
-bun run format 2>/dev/null || npx oxfmt
+# 2. Format + auto-fix
+bun run format
 
-# Type check — always works
+# 3. Type check — MUST pass
 bunx tsc --noEmit
 
-# Tests — run if available, warn if test script is missing
-bun run test 2>/dev/null || echo "Warning: no test script found, skipping tests"
+# 4. Tests — MUST pass
+bun run test
 ```
 
-**Type check must pass.** Lint and format are best-effort with fallback.
-If tests fail due to the fix, adjust the fix. If tests fail for unrelated reasons, note it in the PR.
+**i18n check** (run if any `src/renderer/`, `locales/`, or `src/common/config/i18n` files were modified):
+
+```bash
+bun run i18n:types
+node scripts/check-i18n.js
+```
+
+- `i18n:types` must run **before** `check-i18n.js`
+- If `check-i18n.js` exits with errors → fix them before proceeding
+- If `check-i18n.js` exits with warnings only → may proceed
+
+**Final CI verification** — replicate the exact CI check locally:
+
+```bash
+prek run --from-ref origin/main --to-ref HEAD
+```
+
+- If `prek` reports issues → fix them (run `bun run lint:fix` and `bun run format` again), then re-run `prek`
+- `prek` uses check-only commands (`lint`, `format:check`) — it will catch anything the auto-fix missed
+
+**Gate rules:**
+
+| Check      | Result | Action                                                              |
+| ---------- | ------ | ------------------------------------------------------------------- |
+| Type check | FAIL   | Fix type errors and re-run. Max 3 attempts, then **abandon issue**. |
+| Tests      | FAIL   | Adjust fix/test and re-run. Max 3 attempts, then **abandon issue**. |
+| i18n       | FAIL   | Fix missing keys and re-run.                                        |
+| prek       | FAIL   | Fix reported issues and re-run.                                     |
 
 #### Step 2.5: Verify Fix
 
@@ -311,7 +368,8 @@ Verification strategy depends on **which process** the error originates from:
 
 #### Step 2.6: Commit & Create PR
 
-**Delegate to existing skills** — do not manually construct commit messages or PR bodies.
+**Do NOT invoke `/commit` or `/oss-pr`** — they may prompt for confirmation, which blocks
+the daemon flow. Instead, commit and create the PR directly using the commands below.
 
 **Pre-flight duplicate check** (safety net, supplements triage-phase filtering):
 
@@ -323,18 +381,41 @@ gh issue list --repo <org>/<repo> --state open --search "<error-keyword>" --json
 If an existing OPEN PR/issue addresses the same root cause, **STOP** — do not create a duplicate.
 Instead, report to the user and suggest updating the existing PR if needed.
 
-1. **Commit**: Invoke the [commit skill](../commit/SKILL.md) (`/commit`).
-   The commit skill will analyze changes, run quality checks, format the commit message,
-   and handle all conventions (no AI signatures, no --no-verify, etc.).
-   Provide context: this is a Sentry bug fix, reference the Sentry issue IDs.
+1. **Commit** directly:
 
-2. **Create PR as Draft**: Invoke the [PR skill](../pr/SKILL.md) (`/pr`).
-   The PR skill will create a GitHub issue if needed, push the branch, and create the PR
-   with proper formatting and issue linkage.
-   **Always create as Draft** (`gh pr create --draft`) — PR starts in WIP state.
-   Provide context: include Sentry issue IDs, occurrence counts, error details,
-   **and verification results** (screenshots, console logs, pass/fail status)
-   so the PR skill can incorporate them into the issue and PR body.
+   ```bash
+   git add <changed-files>
+   git commit -m "<type>(<scope>): <subject>"
+   ```
+
+   Follow project commit conventions: `<type>(<scope>): <subject>` in English.
+   No AI signatures. Reference the Sentry issue IDs in the commit body if needed.
+
+2. **Push branch and create PR as Draft**:
+
+   ```bash
+   git push -u origin fix/sentry-<shortId>
+
+   gh pr create --draft --title "<type>(<scope>): <subject>" --body "$(cat <<'EOF'
+   ## Summary
+
+   <1-3 bullet points describing the fix>
+
+   ## Sentry Issues
+
+   - <Sentry issue ID> — <error message> (<occurrence count> occurrences)
+
+   ## Test Plan
+
+   - [x] Unit tests pass
+   - [x] Type check passes
+   - [x] Lint and format pass
+   EOF
+   )"
+   ```
+
+   PR title: under 70 characters, `<type>(<scope>): <description>` format.
+   **NEVER add AI-generated signatures, `Generated with`, or `Co-Authored-By` lines.**
 
 3. **Mark PR Ready based on verification result:**
 
@@ -353,9 +434,6 @@ Instead, report to the user and suggest updating the existing PR if needed.
    gh pr edit <pr-number> --add-label "needs-manual-review"
    ```
 
-This ensures all commits and PRs follow the project's established conventions
-without duplicating rules across skills.
-
 #### Step 2.7: Return to Main
 
 ```bash
@@ -368,6 +446,40 @@ Proceed to the next group.
 
 After all groups are processed, output a summary report.
 See [references/report-template.md](references/report-template.md) for the exact format.
+
+#### Step 3.1: Update Skip List (Daemon Mode Only)
+
+In daemon mode (`limit > 0`), after the summary report, update `~/.aionui-fix-sentry/skip-list.json`
+with all issues that were **skipped** in this session. This prevents the next session from
+re-analyzing the same issues.
+
+**TTL by classification:**
+
+| Classification    | TTL      | Reason                                            |
+| ----------------- | -------- | ------------------------------------------------- |
+| system_level      | 7 days   | These never change (EPIPE, ENOSPC, EIO, uv, etc.) |
+| already_fixed     | 48 hours | Re-check in case of regression                    |
+| unfixable         | 24 hours | Might become fixable with new code changes        |
+| fix_pending_merge | 12 hours | PR might get merged, issue might resolve          |
+
+**Write rules:**
+
+1. Read the existing file first (preserve entries from previous sessions that haven't expired)
+2. For each skipped issue in this session, add or update its entry with the appropriate TTL
+3. For issues that were **fixed** in this session (PR created), do NOT add to skip list —
+   they should be detected as "already fixed" by the next session's normal triage
+4. Write the merged result back to the file
+
+**Example output:**
+
+```json
+{
+  "ELECTRON-A7": { "reason": "system_level", "expires": "2026-04-03T03:00:00Z", "summary": "EPIPE in net.Socket" },
+  "ELECTRON-6X": { "reason": "already_fixed", "expires": "2026-03-29T03:00:00Z", "summary": "PR #1758 merged" },
+  "ELECTRON-16": { "reason": "system_level", "expires": "2026-04-03T03:00:00Z", "summary": "Electron SingletonCookie" },
+  "ELECTRON-X": { "reason": "fix_pending_merge", "expires": "2026-03-27T15:00:00Z", "summary": "PR #1498 open" }
+}
+```
 
 ## Configuration
 

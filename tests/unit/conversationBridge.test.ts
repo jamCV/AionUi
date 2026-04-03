@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: vi.fn(() => '/tmp') } }));
 
+type ProviderHandler = (...args: unknown[]) => unknown;
+
 // Capture provider handlers so tests can invoke them directly
-const handlers: Record<string, (...args: any[]) => any> = {};
+const handlers: Record<string, ProviderHandler> = {};
 const { turnSnapshotServiceMock, turnSnapshotCoordinatorMock } = vi.hoisted(() => ({
   turnSnapshotServiceMock: {
     listTurnSnapshots: vi.fn(async () => []),
@@ -26,7 +28,7 @@ const { turnSnapshotServiceMock, turnSnapshotCoordinatorMock } = vi.hoisted(() =
 
 function makeChannel(name: string) {
   return {
-    provider: vi.fn((fn: (...args: any[]) => any) => {
+    provider: vi.fn((fn: ProviderHandler) => {
       handlers[name] = fn;
     }),
     emit: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock('../../src/common', () => ({
       stop: makeChannel('stop'),
       sendMessage: makeChannel('sendMessage'),
       getSlashCommands: makeChannel('getSlashCommands'),
+      askSideQuestion: makeChannel('askSideQuestion'),
       reloadContext: makeChannel('reloadContext'),
       getWorkspace: makeChannel('getWorkspace'),
       responseSearchWorkSpace: makeChannel('responseSearchWorkSpace'),
@@ -172,6 +175,35 @@ describe('conversationBridge', () => {
     service = makeService();
     taskManager = makeTaskManager();
     initConversationBridge(service, taskManager);
+  });
+
+  describe('create', () => {
+    it('returns undefined and skips service when type is missing', async () => {
+      const handler = handlers['create'];
+
+      const result = await handler({
+        name: 'missing type',
+        model: { id: 'm1' },
+        extra: {},
+      } as unknown);
+
+      expect(result).toBeUndefined();
+      expect(service.createConversation).not.toHaveBeenCalled();
+    });
+
+    it('returns undefined and skips service when type is unknown', async () => {
+      const handler = handlers['create'];
+
+      const result = await handler({
+        type: 'unknown-agent',
+        name: 'invalid type',
+        model: { id: 'm1' },
+        extra: {},
+      } as unknown);
+
+      expect(result).toBeUndefined();
+      expect(service.createConversation).not.toHaveBeenCalled();
+    });
   });
 
   describe('getAssociateConversation — listAllConversations path', () => {
@@ -397,8 +429,10 @@ describe('conversationBridge', () => {
 
     it('calls initAgent() when task type is "acp"', async () => {
       const initAgent = vi.fn();
-      const acpTask = { type: 'acp', initAgent };
-      vi.mocked(taskManager.getOrBuildTask).mockResolvedValue(acpTask as any);
+      const acpTask = { type: 'acp', initAgent } as unknown as Awaited<
+        ReturnType<IWorkerTaskManager['getOrBuildTask']>
+      >;
+      vi.mocked(taskManager.getOrBuildTask).mockResolvedValue(acpTask);
 
       const handler = handlers['warmup'];
       await handler({ conversation_id: 'acp-id' });
@@ -409,8 +443,11 @@ describe('conversationBridge', () => {
 
     it('does not call initAgent when task type is not "acp"', async () => {
       const initAgent = vi.fn();
-      const geminiTask = { type: 'gemini', initAgent };
-      vi.mocked(taskManager.getOrBuildTask).mockResolvedValue(geminiTask as any);
+      const geminiTask = {
+        type: 'gemini',
+        initAgent,
+      } as unknown as Awaited<ReturnType<IWorkerTaskManager['getOrBuildTask']>>;
+      vi.mocked(taskManager.getOrBuildTask).mockResolvedValue(geminiTask);
 
       const handler = handlers['warmup'];
       await handler({ conversation_id: 'gemini-id' });

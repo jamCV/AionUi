@@ -3,11 +3,13 @@ import { PWA_REFRESH_EVENT } from '@/renderer/components/layout/PwaPullToRefresh
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import { Spin } from '@arco-design/web-react';
 import React, { useEffect, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useLocation, useParams } from 'react-router-dom';
 import useSWR from 'swr';
 import { refreshConversationMessages, type HydrateConversationMessagesOptions } from './Messages/hooks';
 import ChatConversation from './components/ChatConversation';
 import { useConversationTabs } from './hooks/ConversationTabsContext';
+import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
 
 type ConversationLocationState = {
   targetMessageId?: string;
@@ -28,9 +30,12 @@ const ChatConversationIndex: React.FC = () => {
 
     return { mode: 'latest' };
   }, [locationState.fromConversationSearch, locationState.targetMessageId]);
+  const { t } = useTranslation();
   const { closePreview } = usePreviewContext();
   const { openTab } = useConversationTabs();
+  const { syncTitleFromHistory } = useAutoTitle();
   const previousConversationIdRef = useRef<string | undefined>(undefined);
+  const defaultConversationTitle = t('conversation.welcome.newConversation');
 
   useEffect(() => {
     if (!id) return;
@@ -67,11 +72,28 @@ const ChatConversationIndex: React.FC = () => {
       void mutate();
     };
 
+    const unsubscribe = ipcBridge.conversation.listChanged.on((event) => {
+      if (event.conversationId !== id || event.action !== 'updated') {
+        return;
+      }
+
+      void mutate();
+    });
+
     window.addEventListener(PWA_REFRESH_EVENT, handlePwaRefresh);
     return () => {
       window.removeEventListener(PWA_REFRESH_EVENT, handlePwaRefresh);
+      unsubscribe();
     };
   }, [hydrateOptions, id, mutate]);
+
+  useEffect(() => {
+    if (!data || data.name !== defaultConversationTitle) {
+      return;
+    }
+
+    void syncTitleFromHistory(data.id);
+  }, [data, defaultConversationTitle, syncTitleFromHistory]);
 
   // 当会话数据加载完成后，自动打开 tab
   // Automatically open tab when conversation data is loaded

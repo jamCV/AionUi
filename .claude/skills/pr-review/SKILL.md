@@ -17,7 +17,10 @@ Perform a thorough local code review with full project context — reads source 
 /pr-review [pr_number]
 ```
 
-`$ARGUMENTS` is an optional PR number. If omitted, auto-detect from the current branch.
+`$ARGUMENTS` may contain an optional PR number and/or `--automation` flag.
+
+- Without `--automation`: interactive mode (prompts for confirmation, comment, cleanup)
+- With `--automation`: non-interactive mode (auto-post comment, auto-delete branch, output machine-readable result)
 
 ---
 
@@ -36,6 +39,15 @@ gh pr view --json number -q .number
 If this also fails (not on a PR branch), abort with:
 
 > No PR number provided and cannot detect one from the current branch. Usage: `/pr-review <pr_number>`
+
+Also parse `--automation` from `$ARGUMENTS`:
+
+```bash
+AUTOMATION_MODE=false
+if echo "$ARGUMENTS" | grep -q -- '--automation'; then
+  AUTOMATION_MODE=true
+fi
+```
 
 ### Step 2 — Check CI Status
 
@@ -60,13 +72,15 @@ gh pr view <PR_NUMBER> --json statusCheckRollup \
 - `statusCheckRollup` 为空（CI 从未触发）
 - `statusCheckRollup` 非空，但所有必检 job 均不在列表中（说明 pr-checks.yml 工作流整体未触发，如仅改动 docs/md 文件的 PR）
 
-**解析逻辑：** 对上述必检 job 逐一检查，跳过列表中不存在的 job，对存在的分三种情形处理：
+**解析逻辑：** 分三种情形处理：
 
-**情形 1 — 全部通过**（所有必检 job 均满足 `status == COMPLETED && conclusion == SUCCESS`）
+**Informational checks exclusion:** `codecov/patch` and `codecov/project` are configured as `informational: true` in `codecov.yml` — they never block merging and must be **excluded** from all failure checks below. Treat them as non-existent when evaluating CI status.
+
+**情形 1 — 全部通过**（所有必检 job 均满足 `status == COMPLETED && conclusion == SUCCESS`，**且** `statusCheckRollup` 中无任何**非 informational** job 的 `conclusion` 为 `FAILURE` 或 `CANCELLED`；`codecov/*` 失败不影响此判断）
 
 直接继续后续步骤，无需提示。
 
-**情形 2 — 部分仍在运行**（存在 `status` 为 `QUEUED` 或 `IN_PROGRESS` 的必检 job）
+**情形 2 — 部分仍在运行**（存在 `status` 为 `QUEUED` 或 `IN_PROGRESS` 的**必检** job；非必检 job 仍在运行不影响此判断）
 
 显示警告并询问：
 
@@ -76,7 +90,18 @@ gh pr view <PR_NUMBER> --json statusCheckRollup \
 - 用户选 **no** → 终止
 - 用户选 **yes** → 继续后续步骤
 
-**情形 3 — 存在失败**（存在 `conclusion` 为 `FAILURE` 或 `CANCELLED` 的必检 job）
+- **Automation mode:** do not prompt. Output signal and stop:
+  ```
+  <!-- automation-result -->
+  CONCLUSION: CI_NOT_READY
+  IS_CRITICAL_PATH: false
+  CRITICAL_PATH_FILES: (none)
+  PR_NUMBER: <PR_NUMBER>
+  <!-- /automation-result -->
+  ```
+  Then exit.
+
+**情形 3 — 存在失败**（`statusCheckRollup` 中存在**任意非 informational** job 的 `conclusion` 为 `FAILURE` 或 `CANCELLED`，不限于必检列表；`codecov/*` 始终排除在外）
 
 显示警告并询问：
 
@@ -89,6 +114,17 @@ gh pr view <PR_NUMBER> --json statusCheckRollup \
   > 是否在 PR #\<PR_NUMBER\> 发表评论，提醒作者修复失败的 CI job？(yes/no)
   - 用户选 **yes** → 发布 CI 失败提醒评论（格式见下方"CI 失败提醒评论"节），然后退出
   - 用户选 **no** → 直接退出
+
+- **Automation mode:** do not prompt. Post CI failure comment automatically (same format as "CI 失败提醒评论"), then output signal and stop:
+  ```
+  <!-- automation-result -->
+  CONCLUSION: CI_FAILED
+  IS_CRITICAL_PATH: false
+  CRITICAL_PATH_FILES: (none)
+  PR_NUMBER: <PR_NUMBER>
+  <!-- /automation-result -->
+  ```
+  Then exit.
 
 #### CI 失败提醒评论
 
@@ -120,37 +156,36 @@ gh pr comment <PR_NUMBER> --body "<!-- pr-review-bot -->
 
 ---
 
-### Step 3 — Check Working Tree
+### Step 3 — Create Worktree
+
+Create an isolated worktree for this PR review. The main repo stays on its current branch.
 
 ```bash
-git status --porcelain
+REPO_ROOT=$(git rev-parse --show-toplevel)
+PR_NUMBER=<PR_NUMBER>
+WORKTREE_DIR="/tmp/aionui-pr-${PR_NUMBER}"
+
+# Clean up any stale worktree from a previous crash
+git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
+
+# Fetch PR head and create detached worktree
+git fetch origin pull/${PR_NUMBER}/head
+git worktree add "$WORKTREE_DIR" FETCH_HEAD --detach
+
+# Symlink node_modules so lint/tsc/test can run in the worktree
+ln -s "$REPO_ROOT/node_modules" "$WORKTREE_DIR/node_modules"
 ```
 
-If the output is non-empty, abort with:
+Save `REPO_ROOT` and `WORKTREE_DIR` for use in subsequent steps. All file reads, lint, and diff commands from this point forward run inside `WORKTREE_DIR`.
 
-> Working tree has uncommitted changes. Please commit or stash them before running pr-review.
-
-### Step 4 — Record Current Branch
+Save the checked-out HEAD info:
 
 ```bash
-git branch --show-current
+cd "$WORKTREE_DIR"
+git log --oneline -1
 ```
 
-Save this as `<original_branch>` for Step 10.
-
-### Step 5 — Checkout PR Branch
-
-```bash
-gh pr checkout <PR_NUMBER>
-```
-
-Save the checked-out branch name:
-
-```bash
-git branch --show-current
-```
-
-### Step 6 — Collect Context (Parallel)
+### Step 4 — Collect Context (Parallel)
 
 Run the following in parallel:
 
@@ -163,40 +198,44 @@ gh pr view <PR_NUMBER> --json title,body,author,labels,headRefName,baseRefName,s
 **Full diff (no truncation):**
 
 ```bash
+cd "$WORKTREE_DIR"
 git diff origin/<baseRefName>...HEAD
 ```
 
 **Changed file list:**
 
 ```bash
+cd "$WORKTREE_DIR"
 git diff --name-status origin/<baseRefName>...HEAD
 ```
 
-**Existing pr-assess comment (if any):**
+**PR discussion comments (excluding bot review comments):**
 
 ```bash
-gh pr view <PR_NUMBER> --json comments --jq '.comments[] | select(.body | startswith("<!-- pr-assess-bot -->")) | .body'
+gh pr view <PR_NUMBER> --json comments \
+  --jq '[.comments[] | select(.body | startswith("<!-- pr-review-bot -->") | not) | select(.body | startswith("<!-- pr-automation-bot -->") | not) | {author: .author.login, body: .body, createdAt: .createdAt}]'
 ```
 
-If a pr-assess comment exists, use it as supplementary context (risk signals, change overview) when forming your review. Do not re-verify its conclusions — treat it as background information only.
+Save as `pr_discussion`. Use in Step 7 as supplementary context for **方案合理性** evaluation — if participants have explained design decisions or flagged known trade-offs, factor that in. Code is always the authoritative source; comments are context only.
 
-### Step 7 — Run Lint on Changed Files
+### Step 5 — Run Lint on Changed Files
 
 Run oxlint on all changed `.ts` / `.tsx` files (skip deleted files):
 
 ```bash
+cd "$WORKTREE_DIR"
 bunx oxlint <changed_ts_tsx_files...>
 ```
 
-Save the lint output as **lint baseline**. Use it when reviewing style and code quality in Step 8:
+Save the lint output as **lint baseline**. Use it when reviewing style and code quality in Step 6:
 
 - If a pattern produces **no lint warning** → it is project-approved; do not flag it as a style issue.
 - If a pattern produces **a lint warning/error** → it is a real violation; report it at the appropriate severity (ERROR → HIGH, WARNING → LOW).
 - Do **not** suggest replacing a lint-clean pattern with an alternative based on general convention alone (e.g. do not suggest spread over `Object.assign` if `no-map-spread` is active).
 
-### Step 8 — Read Changed File Contents
+### Step 6 — Read Changed File Contents
 
-Use the Read tool to read each changed file locally.
+> Use the Read tool to read each changed file from the **worktree** path (`$WORKTREE_DIR/<relative_path>`), not from the main repo.
 
 **Skip:**
 
@@ -215,7 +254,7 @@ Use the Read tool to read each changed file locally.
 
 Also read key interface/type definition files imported by the changed files when they provide important context.
 
-### Step 9 — Perform Code Review
+### Step 7 — Perform Code Review
 
 Write the code review report in **Chinese**.
 
@@ -234,6 +273,7 @@ Review dimensions:
   - 修改了逻辑但未更新已有相关测试
   - 新增的源文件被 `vitest.config.ts` 的 `coverage.exclude` 意外排除（即本应计入覆盖但被错误排除）
   - 已有测试不符合 testing skill Step 2 的质量规则
+  - `codecov/patch` CI check 显示 FAILURE（patch 覆盖率低于 50%）：虽然 `codecov.yml` 将此 check 设为 `informational: true`（不阻塞合并），但覆盖率不足说明本次改动新增代码缺乏测试，应在 review 中指出（级别 LOW，供作者参考）
 - **可测试性** — 变更后的代码是否仍可独立测试；依赖是否可 mock；
   是否与已有模块保持解耦；能否在不依赖完整运行环境的情况下运行单元测试。
   发现耦合时区分来源：
@@ -340,13 +380,17 @@ If no issues are found across all dimensions, output:
 
 > ✅ 未发现明显问题，代码质量良好，建议批准合并。
 
-### Step 10 — Ask to Post Comment
+### Step 8 — Ask to Post Comment
 
-Print the complete review report to the terminal, then ask the user:
+Print the complete review report to the terminal.
 
+**Automation mode:** skip the prompt — automatically proceed to post the comment.
+
+**Non-automation mode:** ask the user:
 > Review 完成。是否将此报告发布为 PR #<PR_NUMBER> 的评论？(yes/no)
+If the user says **no**, skip posting.
 
-If the user says **yes**:
+To post:
 
 1. Check for an existing review comment:
 ```bash
@@ -369,20 +413,69 @@ gh pr comment <PR_NUMBER> --body "<!-- pr-review-bot -->
 <review_report>"
 ```
 
-### Step 11 — Cleanup
+**Automation mode only — after posting the comment, output the machine-readable result block:**
 
-Switch back to the original branch:
+Map the review conclusion to CONCLUSION value based on the **highest severity issue found**:
+
+| Highest issue severity | Review 结论   | CONCLUSION  |
+| ---------------------- | ------------- | ----------- |
+| None / LOW only        | ✅ 批准合并   | APPROVED    |
+| MEDIUM                 | ⚠️ 有条件批准 | CONDITIONAL |
+| HIGH                   | ⚠️ 有条件批准 | CONDITIONAL |
+| CRITICAL               | ❌ 需要修改   | REJECTED    |
+
+**Key rule:** If all issues are LOW (or there are no issues), emit `APPROVED` even when the human-facing verdict says "有条件批准". `pr-fix` explicitly skips LOW issues, so triggering a fix session for LOW-only reviews wastes a round with no actionable outcome.
+
+Determine `IS_CRITICAL_PATH` using the `CRITICAL_PATH_PATTERN` env var (defined in `scripts/pr-automation.conf`, passed by daemon at runtime).
+When a pattern is defined, check and capture matched files:
 
 ```bash
-git checkout <original_branch>
+# CRITICAL_PATH_PATTERN is an env var — set by pr-automation daemon or manually
+if [ -n "$CRITICAL_PATH_PATTERN" ]; then
+  cd "$WORKTREE_DIR"
+  CRITICAL_FILES=$(git diff origin/<baseRefName>...HEAD --name-only | grep -E "$CRITICAL_PATH_PATTERN")
+  if [ -n "$CRITICAL_FILES" ]; then
+    IS_CRITICAL_PATH=true
+  else
+    IS_CRITICAL_PATH=false
+  fi
+else
+  IS_CRITICAL_PATH=false
+  CRITICAL_FILES=""
+fi
 ```
 
-Ask the user:
+Output:
 
-> 是否删除本地 PR 分支 `<pr_branch>`？(yes/no)
+```
+<!-- automation-result -->
+CONCLUSION: APPROVED
+IS_CRITICAL_PATH: false
+CRITICAL_PATH_FILES: (none)
+PR_NUMBER: 123
+<!-- /automation-result -->
+```
 
-If yes:
+When `IS_CRITICAL_PATH` is true, list matched files one per line:
+
+```
+<!-- automation-result -->
+CONCLUSION: APPROVED
+IS_CRITICAL_PATH: true
+CRITICAL_PATH_FILES:
+- docs/feature/extension-market/agent-hub-requirements.md
+- docs/feature/extension-market/research/architecture.md
+PR_NUMBER: 456
+<!-- /automation-result -->
+```
+
+### Step 9 — Cleanup
+
+Remove the worktree. No branch switching needed — the main repo was never touched.
 
 ```bash
-git branch -D <pr_branch>
+cd "$REPO_ROOT"
+git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
 ```
+
+Both automation and non-automation modes use the same cleanup — no prompt needed since worktree removal has no side effects.

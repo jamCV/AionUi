@@ -2,6 +2,7 @@ import { AcpAgent } from '@process/agent/acp';
 import { channelEventBus } from '@process/channels/agent/ChannelEventBus';
 import { ipcBridge } from '@/common';
 import type { CronMessageMeta, TMessage } from '@/common/chat/chatLib';
+import { isCodexAutoApproveMode } from '@/common/types/codex/codexModes';
 import type { SlashCommandItem } from '@/common/chat/slash/types';
 import { transformMessage } from '@/common/chat/chatLib';
 import { AIONUI_FILES_MARKER } from '@/common/config/constants';
@@ -26,16 +27,21 @@ import { mainLog, mainWarn, mainError } from '@process/utils/mainLogger';
 import { notifyTeamTurnCompleted } from '@process/team/teamRuntimeHooks';
 import { TeamHiddenCommandCodec } from '@process/team/TeamHiddenCommandCodec';
 import type { TeamCommand } from '@process/team/teamTypes';
+import {
+  getCodexSandboxModeForSessionMode,
+  type CodexSandboxMode,
+  writeCodexSandboxMode,
+} from '@process/agent/codex/connection/codexConfig';
 /** Enable ACP performance diagnostics via ACP_PERF=1 */
 const ACP_PERF_LOG = process.env.ACP_PERF === '1';
 
 import BaseAgentManager from './BaseAgentManager';
 import { IpcAgentEventEmitter } from './IpcAgentEventEmitter';
 import { hasCronCommands } from './CronCommandDetector';
-import { hasNativeSkillSupport } from '@process/utils/initAgent';
+import { extractAndStripThinkTags } from './ThinkTagDetector';
+import { hasNativeSkillSupport } from '@/common/types/acpTypes';
 import { prepareFirstMessageWithSkillsIndex } from '@process/task/agentUtils';
 import { extractTextFromMessage, processCronInMessage } from './MessageMiddleware';
-import { stripThinkTags } from './ThinkTagDetector';
 
 interface AcpAgentManagerData {
   workspace?: string;
@@ -59,6 +65,7 @@ interface AcpAgentManagerData {
   sessionMode?: string;
   /** Persisted model ID for resume support / 持久化的模型 ID，用于恢复 */
   currentModelId?: string;
+  sandboxMode?: CodexSandboxMode;
 }
 
 type BufferedStreamTextMessage = {
@@ -80,6 +87,13 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
   // Track current message for cron detection (accumulated from streaming chunks)
   private currentMsgId: string | null = null;
   private currentMsgContent: string = '';
+  /** Current turn's thinking message msg_id for accumulating content */
+  private thinkingMsgId: string | null = null;
+  /** Timestamp when thinking started for duration calculation */
+  private thinkingStartTime: number | null = null;
+  /** Accumulated thinking content for persistence */
+  private thinkingContent: string = '';
+  private thinkingDbFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private acpAvailableSlashCommands: SlashCommandItem[] = [];
   private acpAvailableSlashWaiters: Array<(commands: SlashCommandItem[]) => void> = [];
   private readonly streamDbFlushIntervalMs = 120;
@@ -98,7 +112,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
     this.persistedModelId = data.currentModelId || null;
     this.status = 'pending';
     // Sync yoloMode from sessionMode so addConfirmation auto-approves when Full Auto is selected
-    this.yoloMode = this.yoloMode || this.currentMode === 'yolo' || this.currentMode === 'bypassPermissions';
+    this.yoloMode = this.yoloMode || this.isYoloMode(this.currentMode);
   }
 
   private makeStreamBufferKey(message: Extract<TMessage, { type: 'text' }>): string {
@@ -207,6 +221,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
       } else if (data.backend !== 'custom') {
         // Handle built-in backends: read from acp.config
         const config = await ProcessConfig.get('acp.config');
+        const codexConfig = data.backend === 'codex' ? await ProcessConfig.get('codex.config') : undefined;
         if (!cliPath && config?.[data.backend]?.cliPath) {
           cliPath = config[data.backend].cliPath;
         }
@@ -249,6 +264,15 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         if (!cliPath && backendConfig?.cliCommand) {
           cliPath = backendConfig.cliCommand;
         }
+
+        if (data.backend === 'codex') {
+          const sandboxMode = getCodexSandboxModeForSessionMode(
+            data.sessionMode || this.currentMode,
+            data.sandboxMode || codexConfig?.sandboxMode || 'workspace-write'
+          ) as CodexSandboxMode;
+          await writeCodexSandboxMode(sandboxMode);
+          data.sandboxMode = sandboxMode;
+        }
       } else {
         // backend === 'custom' but no customAgentId - this is an invalid state
         // 自定义后端但缺少 customAgentId - 这是无效状态
@@ -273,6 +297,8 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
           agentName: data.agentName,
           acpSessionId: data.acpSessionId,
           acpSessionUpdatedAt: data.acpSessionUpdatedAt,
+          currentModelId: this.persistedModelId ?? undefined,
+          sessionMode: this.currentMode,
         },
         onSessionIdUpdate: (sessionId: string) => {
           // Save ACP session ID to database for resume support
@@ -299,6 +325,17 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
           for (const resolve of waiters) {
             resolve(this.getAcpSlashCommands());
           }
+
+          // Notify frontend that slash commands are now available.
+          // During bootstrap, agent_status events are suppressed, so the
+          // frontend acpStatus never updates and useSlashCommands never
+          // re-fetches. This dedicated event bypasses the bootstrap filter.
+          ipcBridge.acpConversation.responseStream.emit({
+            type: 'slash_commands_updated',
+            conversation_id: this.conversation_id,
+            msg_id: '',
+            data: null,
+          });
         },
         onStreamEvent: (message) => {
           // During bootstrap (warmup), suppress UI stream events to avoid
@@ -359,7 +396,27 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
 
           const sanitizedMessage = this.sanitizeHiddenTeamCommandMessage(message as IResponseMessage);
 
-          if (message.type !== 'thought' && message.type !== 'acp_model_info' && message.type !== 'acp_context_usage') {
+          // Convert thought events to thinking messages in conversation flow
+          if (message.type === 'thought') {
+            const thoughtData = message.data as { subject?: string; description?: string };
+            const content = thoughtData?.description || thoughtData?.subject || '';
+            if (content) {
+              this.emitThinkingMessage(content, 'thinking');
+            }
+          } else if (this.thinkingMsgId) {
+            // Any non-thought message means thinking phase is over
+            this.emitThinkingMessage('', 'done');
+            this.thinkingMsgId = null;
+            this.thinkingStartTime = null;
+            this.thinkingContent = '';
+          }
+
+          if (
+            message.type !== 'thought' &&
+            message.type !== 'thinking' &&
+            message.type !== 'acp_model_info' &&
+            message.type !== 'acp_context_usage'
+          ) {
             const transformStart = Date.now();
             const tMessage = transformMessage(sanitizedMessage as IResponseMessage);
             const transformDuration = Date.now() - transformStart;
@@ -404,17 +461,29 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
           // Filter think tags from streaming content before emitting to UI
           // 在发送到 UI 之前过滤流式内容中的 think 标签
           const filterStart = Date.now();
-          const filteredMessage = this.filterThinkTagsFromMessage(sanitizedMessage as IResponseMessage);
+          let filteredMessage = sanitizedMessage as IResponseMessage;
           const filterDuration = Date.now() - filterStart;
 
+          // Strip inline <think> tags from content messages to prevent leaking
+          // internal reasoning to the UI (e.g. MiniMax models embed think tags in content)
+          if (filteredMessage.type === 'content' && typeof filteredMessage.data === 'string') {
+            const { thinking, content: stripped } = extractAndStripThinkTags(filteredMessage.data);
+            if (thinking) {
+              this.emitThinkingMessage(thinking, 'thinking');
+            }
+            if (stripped !== filteredMessage.data) {
+              filteredMessage = { ...filteredMessage, data: stripped };
+            }
+          }
+
           const emitStart = Date.now();
-          ipcBridge.acpConversation.responseStream.emit(filteredMessage);
+          ipcBridge.acpConversation.responseStream.emit(filteredMessage as IResponseMessage);
           const emitDuration = Date.now() - emitStart;
 
           // Also emit to Channel global event bus (Telegram/Lark streaming)
           // 同时发送到 Channel 全局事件总线（用于 Telegram/Lark 等外部平台）
           channelEventBus.emitAgentMessage(this.conversation_id, {
-            ...filteredMessage,
+            ...(message as IResponseMessage),
             conversation_id: this.conversation_id,
           });
 
@@ -422,7 +491,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
           if (totalDuration > 10) {
             if (ACP_PERF_LOG)
               console.log(
-                `[ACP-PERF] stream: onStreamEvent pipeline ${totalDuration}ms (filter=${filterDuration}ms, emit=${emitDuration}ms) type=${message.type}`
+                `[ACP-PERF] stream: onStreamEvent pipeline ${totalDuration}ms (emit=${emitDuration}ms) type=${message.type}`
               );
           }
         },
@@ -460,9 +529,17 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
             return;
           }
 
-          // Clear busy guard when turn ends
+          // Clear busy guard and finalize thinking message when turn ends
           if (v.type === 'finish') {
             cronBusyGuard.setProcessing(this.conversation_id, false);
+            this.status = 'finished';
+            // Finalize thinking message with done status
+            if (this.thinkingMsgId) {
+              this.emitThinkingMessage('', 'done');
+              this.thinkingMsgId = null;
+              this.thinkingStartTime = null;
+              this.thinkingContent = '';
+            }
           }
 
           // Process cron commands when turn ends (finish signal)
@@ -806,33 +883,64 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
   }
 
   /**
-   * Filter think tags from message content during streaming
-   * This ensures users don't see internal reasoning tags in real-time
-   *
-   * @param message - The streaming message to filter
-   * @returns Message with think tags removed from content
+   * Emit a thinking message to the UI stream.
+   * Creates a new thinking msg_id on first call per turn, reuses it for subsequent calls.
    */
-  private filterThinkTagsFromMessage(message: IResponseMessage): IResponseMessage {
-    // Only filter content messages
-    if (message.type !== 'content' || typeof message.data !== 'string') {
-      return message;
+  private emitThinkingMessage(content: string, status: 'thinking' | 'done' = 'thinking'): void {
+    if (!this.thinkingMsgId) {
+      this.thinkingMsgId = uuid();
+      this.thinkingStartTime = Date.now();
+      this.thinkingContent = '';
     }
 
-    const content = message.data;
-    // Quick check to avoid unnecessary processing
-    // Match both opening and closing tags (including orphaned </think> from MiniMax-style models)
-    if (!/<\s*\/?\s*think(?:ing)?\s*>/i.test(content)) {
-      return message;
+    // Accumulate content during streaming
+    if (status === 'thinking') {
+      this.thinkingContent += content;
     }
 
-    // Strip think tags from content
-    const cleanedContent = stripThinkTags(content);
+    const duration = status === 'done' && this.thinkingStartTime ? Date.now() - this.thinkingStartTime : undefined;
 
-    // Return new message object with cleaned content
-    return {
-      ...message,
-      data: cleanedContent,
+    ipcBridge.acpConversation.responseStream.emit({
+      type: 'thinking',
+      conversation_id: this.conversation_id,
+      msg_id: this.thinkingMsgId,
+      data: {
+        content,
+        duration,
+        status,
+      },
+    });
+
+    // Persist: done flushes immediately, streaming chunks use buffered timer
+    if (status === 'done') {
+      this.flushThinkingToDb(duration, 'done');
+    } else if (!this.thinkingDbFlushTimer) {
+      this.thinkingDbFlushTimer = setTimeout(() => {
+        this.flushThinkingToDb(undefined, 'thinking');
+      }, this.streamDbFlushIntervalMs);
+    }
+  }
+
+  private flushThinkingToDb(duration: number | undefined, status: 'thinking' | 'done'): void {
+    if (this.thinkingDbFlushTimer) {
+      clearTimeout(this.thinkingDbFlushTimer);
+      this.thinkingDbFlushTimer = null;
+    }
+    if (!this.thinkingMsgId) return;
+    const tMessage: TMessage = {
+      id: this.thinkingMsgId,
+      msg_id: this.thinkingMsgId,
+      type: 'thinking',
+      position: 'left',
+      conversation_id: this.conversation_id,
+      content: {
+        content: this.thinkingContent,
+        duration,
+        status,
+      },
+      createdAt: this.thinkingStartTime || Date.now(),
     };
+    addOrUpdateMessage(this.conversation_id, tMessage, this.options.backend);
   }
 
   private sanitizeHiddenTeamCommandMessage(message: IResponseMessage): IResponseMessage {
@@ -988,6 +1096,9 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
       const prev = this.currentMode;
       this.currentMode = mode;
       this.yoloMode = this.isYoloMode(mode);
+      const sandboxMode = getCodexSandboxModeForSessionMode(mode, this.options.sandboxMode);
+      this.options.sandboxMode = sandboxMode;
+      await writeCodexSandboxMode(sandboxMode);
       this.saveSessionMode(mode);
 
       if (this.isYoloMode(prev) && !this.isYoloMode(mode)) {
@@ -1037,7 +1148,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
 
   /** Check if a mode value represents YOLO mode for any backend */
   private isYoloMode(mode: string): boolean {
-    return mode === 'yolo' || mode === 'bypassPermissions';
+    return mode === 'yolo' || mode === 'bypassPermissions' || isCodexAutoApproveMode(mode);
   }
 
   /**
@@ -1230,6 +1341,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         const updatedExtra = {
           ...conversation.extra,
           acpSessionId: sessionId,
+          acpSessionConversationId: this.conversation_id,
           acpSessionUpdatedAt: Date.now(),
         };
         db.updateConversation(this.conversation_id, {

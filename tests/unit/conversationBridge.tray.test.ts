@@ -5,6 +5,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { IConversationService } from '@/process/services/IConversationService';
+import type { IWorkerTaskManager } from '@/process/task/IWorkerTaskManager';
 
 type Provider = (payload?: unknown) => Promise<unknown>;
 
@@ -39,7 +41,7 @@ const mockWorkerTaskManager = {
 
 const registerMocks = () => {
   vi.doMock('@/agent/gemini', () => ({
-    GeminiAgent: {},
+    GeminiAgent: vi.fn(),
     GeminiApprovalStore: { getInstance: vi.fn(() => ({})) },
   }));
 
@@ -67,6 +69,7 @@ const registerMocks = () => {
         responseSearchWorkSpace: { invoke: vi.fn() },
         stop: createCommand('conversation.stop'),
         getSlashCommands: createCommand('conversation.getSlashCommands'),
+        askSideQuestion: createCommand('conversation.askSideQuestion'),
         sendMessage: createCommand('conversation.sendMessage'),
         warmup: createCommand('conversation.warmup'),
         turnSnapshot: {

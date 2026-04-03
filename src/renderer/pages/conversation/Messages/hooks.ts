@@ -318,6 +318,66 @@ const composeMessageWithIndex = (message: TMessage, list: TMessage[], index: Mes
     return list.concat(message);
   }
 
+  // thinking message: accumulate content chunks by msg_id (same logic as composeMessage)
+  if (message.type === 'thinking' && message.msg_id) {
+    const existingIdx = index.msgIdIndex.get(message.msg_id);
+    if (existingIdx !== undefined && existingIdx < list.length) {
+      const existingMsg = list[existingIdx];
+      if (existingMsg.type === 'thinking') {
+        const newList = list.slice();
+        if (message.content.status === 'done') {
+          // Keep accumulated content, update status and duration
+          newList[existingIdx] = {
+            ...existingMsg,
+            content: {
+              ...existingMsg.content,
+              status: 'done' as const,
+              duration: message.content.duration,
+            },
+          };
+        } else {
+          // Append content chunk
+          newList[existingIdx] = {
+            ...existingMsg,
+            content: {
+              ...existingMsg.content,
+              content: existingMsg.content.content + message.content.content,
+              subject: message.content.subject || existingMsg.content.subject,
+            },
+          };
+        }
+        return newList;
+      }
+    }
+    // First thinking message — add and index
+    const newIdx = list.length;
+    index.msgIdIndex.set(message.msg_id, newIdx);
+    return list.concat(message);
+  }
+
+  // plan message: update content and move to end of list
+  if (message.type === 'plan' && message.msg_id) {
+    const existingIdx = index.msgIdIndex.get(message.msg_id);
+    if (existingIdx !== undefined && existingIdx < list.length) {
+      const existingMsg = list[existingIdx];
+      const newList = list.slice();
+      newList.splice(existingIdx, 1);
+      const updated = { ...existingMsg, ...message, content: message.content } as TMessage;
+      newList.push(updated);
+      // Rebuild index after splice
+      const rebuilt = buildMessageIndex(newList);
+      index.msgIdIndex = rebuilt.msgIdIndex;
+      index.callIdIndex = rebuilt.callIdIndex;
+      index.toolCallIdIndex = rebuilt.toolCallIdIndex;
+      return newList;
+    }
+    const newIdx = list.length;
+    index.msgIdIndex.set(message.msg_id, newIdx);
+    return list.concat(message);
+  }
+
+  // agent_status / tips and other msg_id-based messages:
+  // replace the existing item in place instead of appending duplicates.
   if (message.msg_id) {
     const existingIdx = index.msgIdIndex.get(message.msg_id);
     if (existingIdx !== undefined && existingIdx < list.length) {
@@ -698,6 +758,17 @@ export const useAddOrUpdateMessage = () => {
       }
     },
     [flush]
+  );
+};
+
+export const useRemoveMessageByMsgId = () => {
+  const update = useUpdateMessageList();
+
+  return useCallback(
+    (msgId: string) => {
+      update((list) => list.filter((message) => message.msg_id !== msgId));
+    },
+    [update]
   );
 };
 

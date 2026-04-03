@@ -53,6 +53,16 @@ mkdir -p "${LOG_DIR}/tmp"
 # Clean up session logs older than 7 days
 find "${LOG_DIR}/tmp" -name "session-*.log" -mtime +7 -delete 2>/dev/null || true
 
+# Clean up orphan worktrees left by previous daemon crashes
+WORKTREES_DIR="${REPO_ROOT}/.worktrees"
+if [ -d "$WORKTREES_DIR" ]; then
+  for wt in "$WORKTREES_DIR"/fix-sentry-*; do
+    [ -d "$wt" ] || continue
+    git -C "$REPO_ROOT" worktree remove "$wt" --force 2>/dev/null || rm -rf "$wt"
+  done
+fi
+git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+
 # Prevent multiple instances
 if [ -f "$LOCK_FILE" ]; then
   OTHER_PID=$(cat "$LOCK_FILE")
@@ -72,8 +82,22 @@ if command -v caffeinate &>/dev/null; then
   CAFFEINATE_PID=$!
 fi
 
-# Kill all child processes on exit
-trap 'kill 0 2>/dev/null; rm -f "$LOCK_FILE"; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Daemon stopped." >> "$LOG_FILE"' EXIT INT TERM
+# Track current worktree for cleanup on exit
+CURRENT_WORKTREE=""
+
+cleanup() {
+  # Clean up current worktree if it exists
+  if [ -n "$CURRENT_WORKTREE" ] && [ -d "$CURRENT_WORKTREE" ]; then
+    git -C "$REPO_ROOT" worktree remove "$CURRENT_WORKTREE" --force 2>/dev/null || rm -rf "$CURRENT_WORKTREE"
+  fi
+  git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+  rm -f "$LOCK_FILE"
+  # Kill child processes (caffeinate, sleep, etc.)
+  jobs -p | xargs kill 2>/dev/null || true
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Daemon stopped." >> "$LOG_FILE"
+}
+
+trap cleanup EXIT INT TERM
 
 # ─── Helpers ───
 
@@ -103,6 +127,7 @@ while true; do
     sleep "$COOLDOWN"
     continue
   }
+  CURRENT_WORKTREE="$WORKTREE_DIR"
 
   SESSION_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
   ISSUE_LOG="${LOG_DIR}/tmp/session-${SESSION_ID}.log"
@@ -120,8 +145,34 @@ while true; do
 
   log "<<< Claude done (session: ${SESSION_ID}, log: ${ISSUE_LOG})"
 
+  # Extract PR URLs from gh pr create results only (ignore PR URLs in issue bodies / triage)
+  PR_URLS=$(python3 -c "
+import json, re, sys
+ids = set()
+urls = set()
+for line in open(sys.argv[1]):
+    try:
+        for c in (json.loads(line).get('message') or {}).get('content') or []:
+            if not isinstance(c, dict): continue
+            if c.get('type') == 'tool_use' and c.get('name') == 'Bash' and 'gh pr create' in (c.get('input') or {}).get('command', ''):
+                ids.add(c['id'])
+            if c.get('type') == 'tool_result' and c.get('tool_use_id') in ids:
+                urls.update(re.findall(r'https://github\.com/[^/]+/[^/]+/pull/\d+', str(c.get('content',''))))
+    except: pass
+for u in sorted(urls): print(u)
+" "$ISSUE_LOG" 2>/dev/null || true)
+  if [ -n "$PR_URLS" ]; then
+    while IFS= read -r pr_url; do
+      log "    PR created: ${pr_url}"
+    done <<< "$PR_URLS"
+  else
+    log "    No PR created this session"
+  fi
+
   # Cleanup worktree
-  git -C "$REPO_ROOT" worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
+  git -C "$REPO_ROOT" worktree remove "$WORKTREE_DIR" --force 2>/dev/null || rm -rf "$WORKTREE_DIR"
+  git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+  CURRENT_WORKTREE=""
 
   # Check if Claude found anything to fix — adjust wait time accordingly
   if grep -q '\[NO_FIXABLE_ISSUES\]' "$ISSUE_LOG" 2>/dev/null; then

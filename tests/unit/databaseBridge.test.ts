@@ -108,6 +108,14 @@ describe('databaseBridge', () => {
       expect(result).toEqual([]);
     });
 
+    it('does not throw when called with undefined params', async () => {
+      vi.mocked(repo.getMessages).mockReturnValue({ data: [], total: 0, hasMore: false });
+
+      const result = await handlers['getConversationMessages'](undefined);
+
+      expect(result).toEqual([]);
+    });
+
     it('uses provided page and pageSize', async () => {
       vi.mocked(repo.getMessages).mockReturnValue({ data: [], total: 0, page: 2, pageSize: 50, hasMore: false });
 
@@ -253,6 +261,15 @@ describe('databaseBridge', () => {
 
       expect(result).toEqual([]);
     });
+
+    it('does not throw when called with undefined params (ELECTRON-FN)', async () => {
+      vi.mocked(repo.getUserConversations).mockReturnValue({ data: [], total: 0, hasMore: false });
+
+      const result = await handlers['getUserConversations'](undefined);
+
+      expect(repo.getUserConversations).toHaveBeenCalledWith(undefined, 0, 10000);
+      expect(Array.isArray(result)).toBe(true);
+    });
   });
 
   // --- searchConversationMessages ---
@@ -276,6 +293,14 @@ describe('databaseBridge', () => {
       const result = await handlers['searchConversationMessages']({ keyword: 'hello', page: 1, pageSize: 10 });
 
       expect(result).toEqual({ items: [], total: 0, page: 1, pageSize: 10, hasMore: false });
+    });
+
+    it('does not throw when called with undefined params', async () => {
+      vi.mocked(repo.searchMessages).mockReturnValue({ items: [], total: 0, page: 0, pageSize: 20, hasMore: false });
+
+      const result = await handlers['searchConversationMessages'](undefined);
+
+      expect(result).toEqual({ items: [], total: 0, page: 0, pageSize: 20, hasMore: false });
     });
   });
 });
