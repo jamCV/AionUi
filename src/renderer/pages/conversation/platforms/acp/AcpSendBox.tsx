@@ -19,6 +19,7 @@ import { assertBridgeSuccess } from '@/renderer/pages/conversation/platforms/ass
 import { allSupportedExts } from '@/renderer/services/FileService';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { mergeFileSelectionItems } from '@/renderer/utils/file/fileSelection';
+import { buildDisplayMessage, collectSelectedFiles } from '@/renderer/utils/file/messageFiles';
 import { Tag } from '@arco-design/web-react';
 import { Shield } from '@icon-park/react';
 import { iconColors } from '@/renderer/styles/colors';
@@ -120,6 +121,7 @@ const AcpSendBox: React.FC<{
     [teamDelegation.filteredAssistants]
   );
   const { setSendBoxHandler } = usePreviewContext();
+  const [workspacePath, setWorkspacePath] = React.useState('');
 
   // Use useLatestRef to keep latest setters to avoid re-registering handler
   const setContentRef = useLatestRef(setContent);
@@ -159,22 +161,57 @@ const AcpSendBox: React.FC<{
   // Check for and send initial message from guid page
   useAcpInitialMessage({
     conversationId: conversation_id,
+    workspacePath,
     backend,
     setAiProcessing,
     checkAndUpdateTitle,
     addOrUpdateMessage: addOrUpdateMessageRef.current,
   });
 
+  useEffect(() => {
+    let mounted = true;
+    ipcBridge.conversation
+      .get
+      .invoke({ conversation_id })
+      .then((conversation) => {
+        if (!mounted) {
+          return;
+        }
+        const workspace = conversation?.extra?.workspace;
+        setWorkspacePath(typeof workspace === 'string' ? workspace : '');
+      })
+      .catch(() => {
+        if (mounted) {
+          setWorkspacePath('');
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [conversation_id]);
+
   const executeCommand = useCallback(
     async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {
       const msg_id = uuid();
+      const displayMessage = buildDisplayMessage(input, files, workspacePath);
+      const userMessage: TMessage = {
+        id: msg_id,
+        msg_id,
+        conversation_id,
+        type: 'text',
+        position: 'right',
+        content: { content: displayMessage },
+        createdAt: Date.now(),
+      };
 
+      addOrUpdateMessage(userMessage, true);
       setAiProcessing(true);
 
       try {
         void checkAndUpdateTitle(conversation_id, input);
         const result = await ipcBridge.acpConversation.sendMessage.invoke({
-          input,
+          input: displayMessage,
           msg_id,
           conversation_id,
           files,
@@ -215,7 +252,7 @@ Please check your local CLI tool authentication status`,
         emitter.emit('acp.workspace.refresh');
       }
     },
-    [backend, checkAndUpdateTitle, conversation_id, setAiProcessing, t]
+    [addOrUpdateMessage, backend, checkAndUpdateTitle, conversation_id, setAiProcessing, t, workspacePath]
   );
 
   const {
@@ -241,17 +278,27 @@ Please check your local CLI tool authentication status`,
   });
 
   const onSendHandler = async (message: string) => {
-    const msg_id = uuid();
-    const atPathFiles = atPath.map((item) => (typeof item === 'string' ? item : item.path));
-    const allFiles = [...uploadFile, ...atPathFiles];
+    const allFiles = collectSelectedFiles(uploadFile, atPath);
+    const displayMessage = buildDisplayMessage(message, allFiles, workspacePath);
 
     clearFiles();
 
     if (teamDelegation.selectedAssistant) {
+      const msg_id = uuid();
+      const delegatedUserMessage: TMessage = {
+        id: msg_id,
+        msg_id,
+        conversation_id,
+        type: 'text',
+        position: 'right',
+        content: { content: displayMessage },
+        createdAt: Date.now(),
+      };
+      addOrUpdateMessage(delegatedUserMessage, true);
       const result = await ipcBridge.conversation.team.delegateFromUser.invoke({
         conversation_id,
         msg_id,
-        input: message,
+        input: displayMessage,
         files: allFiles,
         delegation: {
           assistantId: teamDelegation.selectedAssistant.id,

@@ -1,6 +1,23 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import AcpSendBox from '@/renderer/pages/conversation/platforms/acp/AcpSendBox';
+import CodexSendBox from '@/renderer/pages/conversation/platforms/codex/CodexSendBox';
+import GeminiSendBox from '@/renderer/pages/conversation/platforms/gemini/GeminiSendBox';
+import NanobotSendBox from '@/renderer/pages/conversation/platforms/nanobot/NanobotSendBox';
+import OpenClawSendBox from '@/renderer/pages/conversation/platforms/openclaw/OpenClawSendBox';
+import { buildDisplayMessage, collectSelectedFiles } from '@/renderer/utils/file/messageFiles';
+
+vi.mock('@/renderer/pages/conversation/TurnSummaryPanel', () => ({
+  __esModule: true,
+  default: () => React.createElement('div'),
+}));
+
+vi.mock('@/renderer/pages/conversation/platforms/acp/useAcpInitialMessage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/renderer/pages/conversation/platforms/acp/useAcpInitialMessage')>();
+  return actual;
+});
+
 
 type QueueItem = {
   commandId: string;
@@ -51,6 +68,9 @@ const mockArcoSuccess = vi.fn();
 const mockAssertBridgeSuccess = vi.fn();
 const mockSetSendBoxHandler = vi.fn();
 const mockClearFiles = vi.fn();
+const mockSetSendBoxDraftData = vi.fn();
+const mockAcpSetAiProcessing = vi.fn();
+const mockAcpResetState = vi.fn();
 
 let uuidCounter = 0;
 
@@ -181,11 +201,7 @@ vi.mock('@/renderer/components/agent/AgentSetupCard', () => ({
 vi.mock('@/renderer/hooks/chat/useSendBoxDraft', () => ({
   getSendBoxDraftHook: vi.fn(() =>
     vi.fn(() => ({
-      data: {
-        atPath: [],
-        content: '',
-        uploadFile: [],
-      },
+      data: mockSetSendBoxDraftData(),
       mutate: vi.fn(),
     }))
   ),
@@ -258,18 +274,21 @@ vi.mock('@/renderer/pages/conversation/platforms/acp/useAcpMessage', () => ({
   useAcpMessage: vi.fn(() => ({
     thought: { subject: '', description: '' },
     running: false,
+    hasHydratedRunningState: false,
     acpStatus: null,
     aiProcessing: false,
-    setAiProcessing: vi.fn(),
-    resetState: vi.fn(),
+    setAiProcessing: mockAcpSetAiProcessing,
+    resetState: mockAcpResetState,
     tokenUsage: 0,
     contextLimit: 0,
+    hasThinkingMessage: false,
   })),
 }));
 
-vi.mock('@/renderer/pages/conversation/platforms/acp/useAcpInitialMessage', () => ({
-  useAcpInitialMessage: vi.fn(),
-}));
+vi.mock('@/renderer/pages/conversation/platforms/acp/useAcpInitialMessage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/renderer/pages/conversation/platforms/acp/useAcpInitialMessage')>();
+  return actual;
+});
 
 vi.mock('@/renderer/pages/conversation/platforms/gemini/useGeminiMessage', () => ({
   useGeminiMessage: vi.fn(() => ({
@@ -353,11 +372,6 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-import AcpSendBox from '@/renderer/pages/conversation/platforms/acp/AcpSendBox';
-import CodexSendBox from '@/renderer/pages/conversation/platforms/codex/CodexSendBox';
-import GeminiSendBox from '@/renderer/pages/conversation/platforms/gemini/GeminiSendBox';
-import NanobotSendBox from '@/renderer/pages/conversation/platforms/nanobot/NanobotSendBox';
-import OpenClawSendBox from '@/renderer/pages/conversation/platforms/openclaw/OpenClawSendBox';
 
 const resetQueueSpies = () => {
   for (const spy of Object.values(queueSpies)) {
@@ -370,6 +384,11 @@ describe('platform send box queue integration', () => {
     vi.clearAllMocks();
     uuidCounter = 0;
     resetQueueSpies();
+    mockSetSendBoxDraftData.mockReturnValue({
+      atPath: [],
+      content: '',
+      uploadFile: [],
+    });
 
     mockShouldEnqueueConversationCommand.mockReturnValue(false);
     mockUseConversationCommandQueue.mockReturnValue({
@@ -436,7 +455,7 @@ describe('platform send box queue integration', () => {
       <AcpSendBox conversation_id='conv-acp' backend='claude' />,
       mockAcpSendInvoke,
       (payload: { input: string; conversation_id: string }) => {
-        expect(payload.input).toBe('queued command');
+        expect(payload.input).toContain('queued command');
         expect(payload.conversation_id).toBe('conv-acp');
       },
     ],
@@ -557,6 +576,80 @@ describe('platform send box queue integration', () => {
     });
 
     expect(queueSpies.resetActiveExecution).toHaveBeenCalledWith('stop');
+  });
+
+  it('renders ACP attachment display message while preserving backend files payload', async () => {
+    mockSetSendBoxDraftData.mockReturnValue({
+      atPath: [{ path: 'C:/workspace/folder/doc.md' }],
+      content: '',
+      uploadFile: ['C:/workspace/uploads/image.png'],
+    });
+
+    render(<AcpSendBox conversation_id='conv-acp' backend='claude' />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'trigger-send' }));
+
+    await waitFor(() => {
+      expect(mockAcpSendInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    expect(collectSelectedFiles).toHaveBeenCalledWith(
+      ['C:/workspace/uploads/image.png'],
+      [{ path: 'C:/workspace/folder/doc.md' }]
+    );
+    expect(buildDisplayMessage).toHaveBeenCalledWith(
+      'queued command',
+      ['C:/workspace/uploads/image.png', 'C:/workspace/folder/doc.md'],
+      ''
+    );
+    expect(mockAddOrUpdateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation_id: 'conv-acp',
+        position: 'right',
+        content: { content: 'queued command|C:/workspace/uploads/image.png,C:/workspace/folder/doc.md|' },
+      }),
+      true
+    );
+    expect(mockAcpSendInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 'queued command|C:/workspace/uploads/image.png,C:/workspace/folder/doc.md|',
+        files: ['C:/workspace/uploads/image.png', 'C:/workspace/folder/doc.md'],
+      })
+    );
+  });
+
+  it('renders ACP initial message attachments before sending to backend', async () => {
+    const stored = JSON.stringify({
+      input: 'initial command',
+      files: ['C:/workspace/uploads/initial.png'],
+    });
+    sessionStorage.setItem('acp_initial_message_conv-acp', stored);
+
+    render(<AcpSendBox conversation_id='conv-acp' backend='claude' />);
+
+    await waitFor(() => {
+      expect(mockAcpSendInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    expect(buildDisplayMessage).toHaveBeenCalledWith(
+      'initial command',
+      ['C:/workspace/uploads/initial.png'],
+      ''
+    );
+    expect(mockAddOrUpdateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation_id: 'conv-acp',
+        position: 'right',
+        content: { content: 'initial command|C:/workspace/uploads/initial.png|' },
+      }),
+      true
+    );
+    expect(mockAcpSendInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 'initial command|C:/workspace/uploads/initial.png|',
+        files: ['C:/workspace/uploads/initial.png'],
+      })
+    );
   });
 
   it('blocks OpenClaw dispatch when runtime validation fails', async () => {
