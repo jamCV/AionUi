@@ -10,6 +10,11 @@ import { extractContentFromDiff } from '@/renderer/utils/file/diffUtils';
 import { getFileTypeInfo } from '@/renderer/utils/file/fileType';
 import { useCallback } from 'react';
 
+const isAbsolutePath = (value?: string): boolean => {
+  if (!value) return false;
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\') || value.startsWith('/');
+};
+
 interface DiffPreviewHandlersOptions {
   /** Diff text content */
   diffText: string;
@@ -34,7 +39,8 @@ export const useDiffPreviewHandlers = ({ diffText, displayName, filePath, title 
     (_file: FileChangeItem) => {
       const { contentType, editable, language } = getFileTypeInfo(displayName);
       void launchPreview({
-        relativePath: filePath || displayName,
+        relativePath: filePath ? (isAbsolutePath(filePath) ? undefined : filePath) : displayName,
+        originalPath: isAbsolutePath(filePath) ? filePath : undefined,
         fileName: displayName,
         title,
         contentType,

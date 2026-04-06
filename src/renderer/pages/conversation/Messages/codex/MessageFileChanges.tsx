@@ -13,6 +13,8 @@ import React, { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { WriteFileResult } from '../types';
 
+const isAbsolutePath = (value: string): boolean => /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\') || value.startsWith('/');
+
 // Re-export for backwards compatibility
 export { parseDiff, type FileChangeInfo } from '@/renderer/utils/file/diffUtils';
 
@@ -75,7 +77,8 @@ const MessageFileChanges: React.FC<MessageFileChangesProps> = ({
       const { contentType, editable, language } = getFileTypeInfo(fileInfo.fileName);
 
       void launchPreview({
-        relativePath: fileInfo.fullPath,
+        relativePath: isAbsolutePath(fileInfo.fullPath) ? undefined : fileInfo.fullPath,
+        originalPath: isAbsolutePath(fileInfo.fullPath) ? fileInfo.fullPath : undefined,
         fileName: fileInfo.fileName,
         contentType,
         editable,

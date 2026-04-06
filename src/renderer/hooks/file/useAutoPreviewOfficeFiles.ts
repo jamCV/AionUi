@@ -8,6 +8,7 @@ import { ipcBridge } from '@/common';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import { getFileTypeInfo } from '@/renderer/utils/file/fileType';
 import { useEffect } from 'react';
+import { resolvePreviewTarget } from './previewTarget';
 
 /**
  * Auto-opens a preview tab when a new .pptx/.docx/.xlsx file appears in the
@@ -33,10 +34,15 @@ export const useAutoPreviewOfficeFiles = (workspace: string | undefined) => {
       if (ws !== workspace) return;
 
       const { contentType } = getFileTypeInfo(filePath);
-      const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+      const resolvedTarget = resolvePreviewTarget({
+        workspace,
+        originalPath: filePath,
+        fileName: filePath.split(/[\\/]/).pop() ?? filePath,
+        contentType,
+      });
 
-      if (!findPreviewTab(contentType, '', { filePath, fileName })) {
-        openPreview('', contentType, { filePath, fileName, title: fileName, workspace, editable: false });
+      if (!findPreviewTab(contentType, '', resolvedTarget.metadata)) {
+        openPreview('', contentType, { ...resolvedTarget.metadata, editable: false });
       }
     });
 

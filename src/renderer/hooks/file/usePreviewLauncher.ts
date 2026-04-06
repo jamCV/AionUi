@@ -5,7 +5,6 @@
  */
 
 import { ipcBridge } from '@/common';
-import { joinPath } from '@/common/chat/chatLib';
 import type { PreviewContentType } from '@/common/types/preview';
 import { useConversationContextSafe } from '@/renderer/hooks/context/ConversationContext';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
@@ -14,6 +13,7 @@ import {
   LARGE_TEXT_PREVIEW_THRESHOLD,
 } from '@/renderer/pages/conversation/Preview/constants';
 import { useCallback, useState } from 'react';
+import { resolvePreviewTarget } from './previewTarget';
 
 const LARGE_TEXT_PREVIEW_TYPES = new Set<PreviewContentType>(['code', 'markdown', 'html', 'diff']);
 
@@ -89,24 +89,15 @@ export const usePreviewLauncher = () => {
     }: PreviewLaunchOptions) => {
       setLoading(true);
 
-      // 路径解析 / Path resolution
-      // 优先使用工作区 + 相对路径拼接绝对路径 / Prefer workspace + relative path to build absolute path
-      const absolutePath = workspace && relativePath ? joinPath(workspace, relativePath) : undefined;
-      const resolvedPath = absolutePath || originalPath || relativePath || undefined;
-
-      // 文件名和标题计算 / Compute file name and title
-      const computedFileName =
-        fileName || (relativePath ? relativePath.split(/[\\/]/).pop() || relativePath : undefined);
-      const previewTitle = title || computedFileName || relativePath || contentType.toUpperCase();
-
-      // 预览元数据 / Preview metadata
-      const metadata = {
-        title: previewTitle,
-        fileName: computedFileName || previewTitle,
-        filePath: resolvedPath,
+      const { absolutePath, resolvedPath, metadata } = resolvePreviewTarget({
         workspace,
+        relativePath,
+        originalPath,
+        fileName,
+        title,
+        contentType,
         language,
-      };
+      });
 
       // 1. 乐观预览：如果有回退内容（如 Diff 中提取的内容），立即显示 / Optimistic preview: Show fallback content immediately if available
       let hasOpened = false;

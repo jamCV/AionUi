@@ -10,6 +10,9 @@ import { getFileExtension } from '@/renderer/services/FileService';
 import { ipcBridge } from '@/common';
 import { Image } from '@arco-design/web-react';
 import fileIcon from '@/renderer/assets/icons/file-icon.svg';
+import { usePreviewLauncher } from '@/renderer/hooks/file/usePreviewLauncher';
+import { getFileTypeInfo } from '@/renderer/utils/file/fileType';
+import { isPreviewSupportedExt } from '@/renderer/pages/conversation/Workspace/utils/filePreview';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']);
 
@@ -46,7 +49,9 @@ const FilePreview: React.FC<FilePreviewProps> = ({ path, onRemove, readonly = fa
     return null;
   }
 
+  const { launchPreview } = usePreviewLauncher();
   const isImage = isImageFile(path);
+  const canPreview = isImage || isPreviewSupportedExt(path);
   // 直接从路径中提取文件名，不清理时间戳后缀
   // Extract filename directly from path without cleaning timestamp suffix
   const fileName = path.split(/[\\/]/).pop() || '';
@@ -107,6 +112,18 @@ const FilePreview: React.FC<FilePreviewProps> = ({ path, onRemove, readonly = fa
     onRemove();
   };
 
+  const handlePreview = () => {
+    if (!canPreview) return;
+    const { contentType, editable, language } = getFileTypeInfo(fileName || path);
+    void launchPreview({
+      originalPath: path,
+      fileName,
+      contentType,
+      editable,
+      language,
+    });
+  };
+
   if (isImage) {
     return (
       <div className='relative inline-block'>
@@ -119,6 +136,7 @@ const FilePreview: React.FC<FilePreviewProps> = ({ path, onRemove, readonly = fa
             className='object-cover cursor-pointer'
             style={{ display: imageUrl ? 'block' : 'none' }}
             preview={imageUrl ? true : false}
+            onClick={handlePreview}
           />
           {!imageUrl && <div className='w-60px h-60px bg-bg-3'></div>}
         </div>
@@ -137,8 +155,9 @@ const FilePreview: React.FC<FilePreviewProps> = ({ path, onRemove, readonly = fa
   return (
     <div className='relative inline-block mb-10px'>
       <div
-        className='h-60px flex items-center gap-12px px-12px rd-8px bg-bg-2 border border-solid'
+        className={`h-60px flex items-center gap-12px px-12px rd-8px bg-bg-2 border border-solid ${canPreview ? 'cursor-pointer hover:bg-bg-3 transition-colors' : ''}`}
         style={{ borderColor: 'var(--border-base)', boxShadow: '0 0 0 1px rgba(0,0,0,0.02)' }}
+        onClick={handlePreview}
       >
         <div className='w-40px h-40px rd-8px flex items-center justify-center flex-shrink-0'>
           <img className='w-full h-full object-contain' src={fileIcon} alt='File Icon' />

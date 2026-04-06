@@ -109,11 +109,19 @@ const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
             <div
               key={`${file.fullPath}-${index}`}
               className={classNames(
-                'group flex items-center justify-between px-16px py-12px hover:bg-3 transition-colors'
+                'group flex items-center justify-between px-16px py-12px hover:bg-3 transition-colors',
+                onFileClick && 'cursor-pointer'
               )}
+              onClick={() => onFileClick?.(file)}
             >
               {/* 文件名 / File name */}
-              <div className='flex items-center min-w-0'>
+              <div
+                className={classNames(
+                  'flex items-center min-w-0 flex-1',
+                  onFileClick && 'cursor-pointer hover:opacity-80 transition-opacity'
+                )}
+                onClick={() => onFileClick?.(file)}
+              >
                 <span className='text-14px text-t-primary truncate'>{file.fileName}</span>
               </div>
               {/* 变更统计 + 预览按钮 / Change statistics + Preview button */}
@@ -144,7 +152,7 @@ const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
                 )}
                 {/* 预览按钮 - 点击打开文件预览 / Preview button - click to open file preview */}
                 <span
-                  className='group-hover:opacity-100 transition-opacity shrink-0 ml-4px flex items-center gap-4px text-12px text-t-secondary cursor-pointer rd-4px px-4px py-2px hover:bg-4'
+                  className='shrink-0 ml-4px flex items-center gap-4px text-12px text-t-secondary cursor-pointer rd-4px px-4px py-2px hover:bg-4 transition-colors'
                   onClick={(e) => {
                     e.stopPropagation();
                     onFileClick?.(file);

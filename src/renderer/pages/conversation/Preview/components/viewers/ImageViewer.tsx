@@ -9,6 +9,10 @@ import { Image } from '@arco-design/web-react';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+const IMAGE_NOT_FOUND_B64_MARKER = 'kltYWdlIG5vdCBmb3VuZD';
+const MAX_IMAGE_RETRIES = 5;
+const IMAGE_RETRY_DELAY_MS = 800;
+
 interface ImagePreviewProps {
   filePath?: string;
   content?: string;
@@ -23,6 +27,8 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({ filePath, content, fileName
 
   useEffect(() => {
     let isMounted = true;
+    let retryCount = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const loadImage = async () => {
       if (content) {
@@ -43,13 +49,29 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({ filePath, content, fileName
         setError(null);
         const base64 = await ipcBridge.fs.getImageBase64.invoke({ path: filePath });
         if (!isMounted) return;
+
+        if (base64.includes(IMAGE_NOT_FOUND_B64_MARKER)) {
+          if (retryCount < MAX_IMAGE_RETRIES) {
+            retryCount++;
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              void loadImage();
+            }, IMAGE_RETRY_DELAY_MS);
+            return;
+          }
+
+          setError(t('messages.imageLoadFailed', { defaultValue: 'Failed to load image' }));
+          setImageSrc('');
+          return;
+        }
+
         setImageSrc(base64);
       } catch (err) {
         if (!isMounted) return;
         console.error('[ImagePreview] Failed to load image:', err);
         setError(t('messages.imageLoadFailed', { defaultValue: 'Failed to load image' }));
       } finally {
-        if (isMounted) {
+        if (isMounted && !retryTimer) {
           setLoading(false);
         }
       }
@@ -59,6 +81,9 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({ filePath, content, fileName
 
     return () => {
       isMounted = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, [content, filePath, t]);
 
