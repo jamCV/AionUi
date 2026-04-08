@@ -65,5 +65,19 @@
     "yesAlwaysAllowTool": "Yes, always allow tool \"{{toolName}}\" from server \"{{serverName}}\"",
     "yesAlwaysAllowServer": "Yes, always allow all tools from server \"{{serverName}}\"",
     "no": "No (esc)"
+  },
+  "turnSnapshot": {
+    "keep": "Keep This Turn",
+    "revert": "Revert This Turn",
+    "pending": "Pending Review",
+    "kept": "Kept",
+    "reverted": "Reverted",
+    "conflict": "Conflict detected",
+    "unsupported": "Revert unavailable",
+    "failed": "Revert failed",
+    "keepFailed": "Failed to keep this turn",
+    "revertFailed": "Failed to revert this turn",
+    "keepSuccess": "Turn kept",
+    "revertSuccess": "Turn reverted"
   }
 }

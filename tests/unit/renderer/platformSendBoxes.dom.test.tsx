@@ -143,6 +143,11 @@ vi.mock('@/renderer/components/chat/ThoughtDisplay', () => ({
   default: () => React.createElement('div', { 'data-testid': 'thought-display' }),
 }));
 
+vi.mock('@/renderer/pages/conversation/platforms/acp/TurnSummaryPanel', () => ({
+  __esModule: true,
+  default: () => React.createElement('div', { 'data-testid': 'turn-summary-panel' }),
+}));
+
 vi.mock('@/renderer/components/media/FilePreview', () => ({
   __esModule: true,
   default: () => React.createElement('div'),

@@ -38,6 +38,7 @@ import { useTeamPermission } from '@/renderer/pages/team/hooks/TeamPermissionCon
 import { useSlashCommands } from '@/renderer/hooks/chat/useSlashCommands';
 import { useAcpMessage } from './useAcpMessage';
 import { useAcpInitialMessage } from './useAcpInitialMessage';
+import TurnSummaryPanel from './TurnSummaryPanel';
 
 const useAcpSendBoxDraft = getSendBoxDraftHook('acp', {
   _type: 'acp',
@@ -347,6 +348,7 @@ Please check your local CLI tool authentication status`,
 
   return (
     <div className='max-w-800px w-full mx-auto flex flex-col mt-auto mb-16px'>
+      <TurnSummaryPanel conversationId={conversation_id} busy={isBusy} />
       <CommandQueuePanel
         items={queuedCommands}
         paused={isQueuePaused}

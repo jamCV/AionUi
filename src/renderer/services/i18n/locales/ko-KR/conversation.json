@@ -294,5 +294,21 @@
   "thinking": {
     "complete": "사고 완료",
     "label": "생각 중..."
+  },
+  "turnSummary": {
+    "title": "Latest Turn",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "viewChanges": "View changes",
+    "noFiles": "No file changes yet",
+    "empty": "No file changes were captured for this turn.",
+    "description": {
+      "pending": "Review these changes before starting the next turn.",
+      "kept": "These changes are kept.",
+      "reverted": "These changes were reverted.",
+      "conflict": "Revert was blocked because the workspace changed after this turn.",
+      "unsupported": "Some files cannot be reverted safely, but this turn can still be kept.",
+      "failed": "Revert failed. Please inspect the workspace manually."
+    }
   }
 }
