@@ -531,11 +531,50 @@ describe('buildGroupedHistory', () => {
     expect(result.timelineSections[0].items[1].type).toBe('conversation'); // conv-3
   });
 
+  it('builds workspaceGroups with date buckets and a temporary bucket', () => {
+    const conversations: TChatConversation[] = [
+      {
+        id: 'conv-1',
+        title: 'Workspace newer',
+        createdAt: new Date('2026-04-03T12:00:00Z').getTime(),
+        updatedAt: new Date('2026-04-03T12:00:00Z').getTime(),
+        extra: { workspace: '/path/a', customWorkspace: true },
+        userMsgCount: 0,
+      },
+      {
+        id: 'conv-2',
+        title: 'Workspace older',
+        createdAt: new Date('2026-04-02T10:00:00Z').getTime(),
+        updatedAt: new Date('2026-04-02T10:00:00Z').getTime(),
+        extra: { workspace: '/path/a', customWorkspace: true },
+        userMsgCount: 0,
+      },
+      {
+        id: 'conv-3',
+        title: 'Temporary',
+        createdAt: new Date('2026-04-01T10:00:00Z').getTime(),
+        updatedAt: new Date('2026-04-01T10:00:00Z').getTime(),
+        extra: {},
+        userMsgCount: 0,
+      },
+    ];
+
+    const result = buildGroupedHistory(conversations, mockT);
+
+    expect(result.workspaceGroups).toHaveLength(2);
+    expect(result.workspaceGroups?.[0].workspace).toBe('/path/a');
+    expect(result.workspaceGroups?.[0].dateGroups).toHaveLength(2);
+    expect(result.workspaceGroups?.[1].isTemporaryBucket).toBe(true);
+    expect(result.workspaceGroups?.[1].displayName).toBe('conversation.history.temporaryWorkspaceGroup');
+    expect(result.workspaceGroups?.[1].dateGroups[0].conversations[0].id).toBe('conv-3');
+  });
+
   it('returns empty arrays when no conversations', () => {
     const result = buildGroupedHistory([], mockT);
 
     expect(result.pinnedConversations).toEqual([]);
     expect(result.timelineSections).toEqual([]);
+    expect(result.workspaceGroups).toEqual([]);
   });
 
   it('handles all conversations being pinned', () => {
@@ -562,6 +601,7 @@ describe('buildGroupedHistory', () => {
 
     expect(result.pinnedConversations).toHaveLength(2);
     expect(result.timelineSections).toEqual([]);
+    expect(result.workspaceGroups).toEqual([]);
   });
 
   it('handles all conversations being cron jobs', () => {
@@ -588,5 +628,6 @@ describe('buildGroupedHistory', () => {
 
     expect(result.pinnedConversations).toEqual([]);
     expect(result.timelineSections).toEqual([]);
+    expect(result.workspaceGroups).toEqual([]);
   });
 });

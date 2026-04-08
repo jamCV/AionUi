@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react';
 
 export const WORKSPACE_EXPANSION_STORAGE_KEY = 'aionui_workspace_expansion';
+export const DATE_GROUP_EXPANSION_STORAGE_KEY = 'aionui_date_group_expansion';
 export const WORKSPACE_EXPANSION_EVENT = 'aionui:workspace-expansion-changed';
+export const DATE_GROUP_EXPANSION_EVENT = 'aionui:date-group-expansion-changed';
 
 type WorkspaceExpansionChangeDetail = {
   expandedWorkspaces: string[];
+};
+
+type DateGroupExpansionChangeDetail = {
+  expandedDateGroups: string[];
 };
 
 export const readExpandedWorkspaces = (): string[] => {
@@ -25,6 +31,24 @@ export const readExpandedWorkspaces = (): string[] => {
   }
 };
 
+export const readExpandedDateGroups = (): string[] => {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const stored = localStorage.getItem(DATE_GROUP_EXPANSION_STORAGE_KEY);
+    if (!stored) {
+      return [];
+    }
+
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
 export const dispatchWorkspaceExpansionChange = (expandedWorkspaces: string[]): void => {
   if (typeof window === 'undefined') {
     return;
@@ -33,6 +57,18 @@ export const dispatchWorkspaceExpansionChange = (expandedWorkspaces: string[]): 
   window.dispatchEvent(
     new CustomEvent<WorkspaceExpansionChangeDetail>(WORKSPACE_EXPANSION_EVENT, {
       detail: { expandedWorkspaces },
+    })
+  );
+};
+
+export const dispatchDateGroupExpansionChange = (expandedDateGroups: string[]): void => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<DateGroupExpansionChangeDetail>(DATE_GROUP_EXPANSION_EVENT, {
+      detail: { expandedDateGroups },
     })
   );
 };
@@ -62,4 +98,31 @@ export const useWorkspaceExpansionState = (): string[] => {
   }, []);
 
   return expandedWorkspaces;
+};
+
+export const useDateGroupExpansionState = (): string[] => {
+  const [expandedDateGroups, setExpandedDateGroups] = useState<string[]>(() => readExpandedDateGroups());
+
+  useEffect(() => {
+    const handleDateGroupExpansionChange = (event: Event) => {
+      const customEvent = event as CustomEvent<DateGroupExpansionChangeDetail>;
+      setExpandedDateGroups(customEvent.detail?.expandedDateGroups ?? readExpandedDateGroups());
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === DATE_GROUP_EXPANSION_STORAGE_KEY) {
+        setExpandedDateGroups(readExpandedDateGroups());
+      }
+    };
+
+    window.addEventListener(DATE_GROUP_EXPANSION_EVENT, handleDateGroupExpansionChange as EventListener);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener(DATE_GROUP_EXPANSION_EVENT, handleDateGroupExpansionChange as EventListener);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  return expandedDateGroups;
 };

@@ -66,6 +66,7 @@
     "pinned": "Pinned",
     "pinFailed": "Pin operation failed",
     "pinnedSection": "Pinned",
+    "temporaryWorkspaceGroup": "臨時會話",
     "deleteSuccess": "刪除成功",
     "deleteFailed": "刪除失敗"
   },

@@ -61,9 +61,11 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
     isConversationGenerating,
     hasCompletionUnread,
     expandedWorkspaces,
+    expandedDateGroups,
     pinnedConversations,
-    timelineSections,
+    workspaceGroups,
     handleToggleWorkspace,
+    handleToggleDateGroup,
   } = useConversations();
 
   const {
@@ -177,7 +179,7 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
   // Collect all sortable IDs for the pinned section
   const pinnedIds = useMemo(() => pinnedConversations.map((c) => c.id), [pinnedConversations]);
 
-  if (timelineSections.length === 0 && pinnedConversations.length === 0) {
+  if (workspaceGroups.length === 0 && pinnedConversations.length === 0) {
     return (
       <div className='py-48px flex-center'>
         <Empty description={t('conversation.history.noHistory')} />
@@ -394,56 +396,39 @@ const WorkspaceGroupedHistory: React.FC<WorkspaceGroupedHistoryProps> = ({
           </DragOverlay>
         </DndContext>
 
-        {timelineSections.map((section) => (
-          <div key={section.timeline} className='mb-8px min-w-0'>
-            {!collapsed && (
-              <div
-                className='group flex items-center px-12px py-6px cursor-pointer select-none sticky top-0 z-10 bg-fill-2'
-                onClick={() => toggleSection(section.timeline)}
-              >
-                <span className='text-12px text-t-secondary font-medium'>{section.timeline}</span>
-                <span className='ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-t-secondary flex items-center'>
-                  {collapsedSections.has(section.timeline) ? (
-                    <Right theme='outline' size={12} />
-                  ) : (
-                    <Down theme='outline' size={12} />
-                  )}
-                </span>
-              </div>
-            )}
-
-            {!collapsedSections.has(section.timeline) &&
-              section.items.map((item) => {
-                if (item.type === 'workspace' && item.workspaceGroup) {
-                  const group = item.workspaceGroup;
-                  return (
-                    <div key={group.workspace} className='min-w-0'>
-                      <WorkspaceCollapse
-                        expanded={expandedWorkspaces.includes(group.workspace)}
-                        onToggle={() => handleToggleWorkspace(group.workspace)}
-                        siderCollapsed={collapsed}
-                        header={
-                          <div className='flex items-center gap-8px text-14px min-w-0'>
-                            <span className='font-medium truncate flex-1 text-t-primary min-w-0'>
-                              {group.displayName}
-                            </span>
-                          </div>
-                        }
-                      >
-                        <div className={classNames('flex flex-col gap-2px min-w-0', { 'mt-2px': !collapsed })}>
-                          {group.conversations.map((conversation) => renderConversation(conversation))}
-                        </div>
-                      </WorkspaceCollapse>
+        {workspaceGroups.map((workspaceGroup) => (
+          <div key={workspaceGroup.key} className={classNames('mb-8px min-w-0', { 'px-8px': !collapsed })}>
+            <WorkspaceCollapse
+              expanded={expandedWorkspaces.includes(workspaceGroup.key)}
+              onToggle={() => handleToggleWorkspace(workspaceGroup.key)}
+              siderCollapsed={collapsed}
+              header={
+                <div className='flex items-center gap-8px text-14px min-w-0'>
+                  <span className='font-medium truncate flex-1 text-t-primary min-w-0'>
+                    {workspaceGroup.displayName}
+                  </span>
+                </div>
+              }
+            >
+              <div className={classNames('flex flex-col gap-6px min-w-0', { 'mt-4px': !collapsed })}>
+                {workspaceGroup.dateGroups.map((dateGroup) => (
+                  <WorkspaceCollapse
+                    key={dateGroup.key}
+                    expanded={collapsed || expandedDateGroups.includes(dateGroup.key)}
+                    onToggle={() => handleToggleDateGroup(dateGroup.key)}
+                    siderCollapsed={collapsed}
+                    className='min-w-0'
+                    header={
+                      <div className='text-12px text-t-secondary font-medium min-w-0 truncate'>{dateGroup.label}</div>
+                    }
+                  >
+                    <div className='flex flex-col gap-2px min-w-0'>
+                      {dateGroup.conversations.map((conversation) => renderConversation(conversation))}
                     </div>
-                  );
-                }
-
-                if (item.type === 'conversation' && item.conversation) {
-                  return renderConversation(item.conversation);
-                }
-
-                return null;
-              })}
+                  </WorkspaceCollapse>
+                ))}
+              </div>
+            </WorkspaceCollapse>
           </div>
         ))}
       </div>

@@ -7,6 +7,7 @@ type VisibleConversationOrderInput = GroupedHistoryResult & {
 
 export const buildVisibleConversationIds = ({
   pinnedConversations,
+  workspaceGroups,
   timelineSections,
   expandedWorkspaces,
   siderCollapsed,
@@ -17,6 +18,22 @@ export const buildVisibleConversationIds = ({
   pinnedConversations.forEach((conversation) => {
     visibleConversationIds.push(conversation.id);
   });
+
+  if (workspaceGroups && workspaceGroups.length > 0) {
+    workspaceGroups.forEach((workspaceGroup) => {
+      if (!siderCollapsed && !expandedWorkspaceSet.has(workspaceGroup.key)) {
+        return;
+      }
+
+      workspaceGroup.dateGroups.forEach((dateGroup) => {
+        dateGroup.conversations.forEach((conversation) => {
+          visibleConversationIds.push(conversation.id);
+        });
+      });
+    });
+
+    return visibleConversationIds;
+  }
 
   timelineSections.forEach((section) => {
     section.items.forEach((item) => {

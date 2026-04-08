@@ -66,6 +66,7 @@
     "pinned": "Pinned",
     "pinFailed": "Pin operation failed",
     "pinnedSection": "Pinned",
+    "temporaryWorkspaceGroup": "Temporary Sessions",
     "deleteSuccess": "Başarıyla silindi",
     "deleteFailed": "Silme başarısız oldu"
   },

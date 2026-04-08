@@ -8,13 +8,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useConversationHistoryContext } from '@/renderer/hooks/context/ConversationHistoryContext';
 import {
+  DATE_GROUP_EXPANSION_STORAGE_KEY,
+  dispatchDateGroupExpansionChange,
   dispatchWorkspaceExpansionChange,
+  readExpandedDateGroups,
   readExpandedWorkspaces,
   WORKSPACE_EXPANSION_STORAGE_KEY,
 } from './useWorkspaceExpansionState';
 
 export const useConversations = () => {
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<string[]>(() => readExpandedWorkspaces());
+  const [expandedDateGroups, setExpandedDateGroups] = useState<string[]>(() => readExpandedDateGroups());
   const { id } = useParams();
   const {
     conversations,
@@ -70,45 +74,51 @@ export const useConversations = () => {
     dispatchWorkspaceExpansionChange(expandedWorkspaces);
   }, [expandedWorkspaces]);
 
-  const { pinnedConversations, timelineSections } = groupedHistory;
+  useEffect(() => {
+    try {
+      localStorage.setItem(DATE_GROUP_EXPANSION_STORAGE_KEY, JSON.stringify(expandedDateGroups));
+    } catch {
+      // ignore
+    }
+
+    dispatchDateGroupExpansionChange(expandedDateGroups);
+  }, [expandedDateGroups]);
+
+  const pinnedConversations = groupedHistory.pinnedConversations;
+  const workspaceGroups = groupedHistory.workspaceGroups ?? [];
 
   // Auto-expand all workspaces on first load only (#1156)
   useEffect(() => {
     if (hasAutoExpandedRef.current) return;
-    if (expandedWorkspaces.length > 0) {
+    if (expandedWorkspaces.length > 0 || expandedDateGroups.length > 0) {
       hasAutoExpandedRef.current = true;
       return;
     }
-    const allWorkspaces: string[] = [];
-    timelineSections.forEach((section) => {
-      section.items.forEach((item) => {
-        if (item.type === 'workspace' && item.workspaceGroup) {
-          allWorkspaces.push(item.workspaceGroup.workspace);
-        }
-      });
-    });
+    const allWorkspaces = workspaceGroups.map((group) => group.key);
+    const allDateGroups = workspaceGroups.flatMap((group) => group.dateGroups.map((dateGroup) => dateGroup.key));
     if (allWorkspaces.length > 0) {
       setExpandedWorkspaces(allWorkspaces);
+      setExpandedDateGroups(allDateGroups);
       hasAutoExpandedRef.current = true;
     }
-  }, [timelineSections]);
+  }, [expandedDateGroups.length, expandedWorkspaces.length, workspaceGroups]);
 
-  // Remove stale workspace entries that no longer exist in the data
   useEffect(() => {
-    const currentWorkspaces = new Set<string>();
-    timelineSections.forEach((section) => {
-      section.items.forEach((item) => {
-        if (item.type === 'workspace' && item.workspaceGroup) {
-          currentWorkspaces.add(item.workspaceGroup.workspace);
-        }
-      });
-    });
+    const currentWorkspaces = new Set(workspaceGroups.map((group) => group.key));
+    const currentDateGroups = new Set(
+      workspaceGroups.flatMap((group) => group.dateGroups.map((dateGroup) => dateGroup.key))
+    );
     if (currentWorkspaces.size === 0) return;
     setExpandedWorkspaces((prev) => {
       const filtered = prev.filter((ws) => currentWorkspaces.has(ws));
       return filtered.length === prev.length ? prev : filtered;
     });
-  }, [timelineSections]);
+
+    setExpandedDateGroups((prev) => {
+      const filtered = prev.filter((dateGroup) => currentDateGroups.has(dateGroup));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [workspaceGroups]);
 
   const handleToggleWorkspace = useCallback((workspace: string) => {
     setExpandedWorkspaces((prev) => {
@@ -119,13 +129,24 @@ export const useConversations = () => {
     });
   }, []);
 
+  const handleToggleDateGroup = useCallback((dateGroupKey: string) => {
+    setExpandedDateGroups((prev) => {
+      if (prev.includes(dateGroupKey)) {
+        return prev.filter((item) => item !== dateGroupKey);
+      }
+      return [...prev, dateGroupKey];
+    });
+  }, []);
+
   return {
     conversations,
     isConversationGenerating,
     hasCompletionUnread,
     expandedWorkspaces,
+    expandedDateGroups,
     pinnedConversations,
-    timelineSections,
+    workspaceGroups,
     handleToggleWorkspace,
+    handleToggleDateGroup,
   };
 };

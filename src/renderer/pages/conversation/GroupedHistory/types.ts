@@ -24,9 +24,26 @@ export type TimelineSection = {
   items: TimelineItem[];
 };
 
+export type WorkspaceDateGroup = {
+  key: string;
+  label: string;
+  time: number;
+  conversations: TChatConversation[];
+};
+
+export type WorkspaceHistoryGroup = {
+  key: string;
+  workspace: string;
+  displayName: string;
+  isTemporaryBucket: boolean;
+  time: number;
+  dateGroups: WorkspaceDateGroup[];
+};
+
 export type GroupedHistoryResult = {
   pinnedConversations: TChatConversation[];
   timelineSections: TimelineSection[];
+  workspaceGroups?: WorkspaceHistoryGroup[];
 };
 
 export type ExportZipFile = {

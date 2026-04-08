@@ -66,6 +66,7 @@
     "pinned": "Pinned",
     "pinFailed": "Pin operation failed",
     "pinnedSection": "Pinned",
+    "temporaryWorkspaceGroup": "Temporary Sessions",
     "deleteSuccess": "削除しました",
     "deleteFailed": "削除に失敗しました"
   },

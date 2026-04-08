@@ -6,6 +6,10 @@
 
 import { describe, expect, it } from 'vitest';
 import type { TChatConversation } from '../../../src/common/config/storage';
+import type {
+  WorkspaceDateGroup,
+  WorkspaceHistoryGroup,
+} from '../../../src/renderer/pages/conversation/GroupedHistory/types';
 import type { TimelineSection, WorkspaceGroup } from '../../../src/renderer/pages/conversation/GroupedHistory/types';
 import { buildVisibleConversationIds } from '../../../src/renderer/pages/conversation/GroupedHistory/utils/visibleConversationOrder';
 
@@ -33,6 +37,25 @@ const createWorkspaceGroup = (workspace: string, conversationIds: string[]): Wor
   workspace,
   displayName: workspace,
   conversations: conversationIds.map((conversationId) => createConversation(conversationId)),
+});
+
+const createDateGroup = (workspace: string, date: string, conversationIds: string[]): WorkspaceDateGroup => ({
+  key: `${workspace}::${date}`,
+  label: date,
+  time: 1,
+  conversations: conversationIds.map((conversationId) => createConversation(conversationId)),
+});
+
+const createWorkspaceHistoryGroup = (
+  workspace: string,
+  dates: Array<{ date: string; ids: string[] }>
+): WorkspaceHistoryGroup => ({
+  key: workspace,
+  workspace,
+  displayName: workspace,
+  isTemporaryBucket: false,
+  time: 1,
+  dateGroups: dates.map(({ date, ids }) => createDateGroup(workspace, date, ids)),
 });
 
 describe('buildVisibleConversationIds', () => {
@@ -112,5 +135,22 @@ describe('buildVisibleConversationIds', () => {
     });
 
     expect(visibleConversationIds).toEqual(['ws-1', 'ws-2']);
+  });
+
+  it('uses workspace/date groups when the new grouped history structure is available', () => {
+    const visibleConversationIds = buildVisibleConversationIds({
+      pinnedConversations: [createConversation('pinned-1')],
+      timelineSections: [],
+      workspaceGroups: [
+        createWorkspaceHistoryGroup('/workspace/project-a', [
+          { date: '2026-04-03', ids: ['ws-1', 'ws-2'] },
+          { date: '2026-04-02', ids: ['ws-3'] },
+        ]),
+      ],
+      expandedWorkspaces: ['/workspace/project-a'],
+      siderCollapsed: false,
+    });
+
+    expect(visibleConversationIds).toEqual(['pinned-1', 'ws-1', 'ws-2', 'ws-3']);
   });
 });
