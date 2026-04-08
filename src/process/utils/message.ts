@@ -22,16 +22,19 @@ class ConversationManageWithDB {
   /** Whether a flush is currently in progress (replaces unbounded promise chain) */
   private flushing = false;
   private initialized = false;
+  private idleWaiters: Array<() => void> = [];
 
   constructor(private conversation_id: string) {
     this.dbPromise
       .then((db) => ensureConversationExists(db, this.conversation_id))
       .then(() => {
         this.initialized = true;
-        this.flush();
+        void this.flush();
+        this.resolveIdleWaiters();
       })
       .catch(() => {
         this.initialized = true;
+        this.resolveIdleWaiters();
       });
   }
   static get(conversation_id: string) {
@@ -50,12 +53,36 @@ class ConversationManageWithDB {
     this.stack.push([type, message]);
     clearTimeout(this.timer);
     if (type === 'insert') {
-      this.flush();
+      void this.flush();
       return;
     }
     this.timer = setTimeout(() => {
-      this.flush();
+      void this.flush();
     }, 2000);
+  }
+
+  drain(): Promise<void> {
+    if (this.initialized && !this.flushing && this.stack.length === 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      this.idleWaiters.push(resolve);
+      if (this.initialized) {
+        void this.flush();
+      }
+    });
+  }
+
+  private resolveIdleWaiters(): void {
+    if (!this.initialized || this.flushing || this.stack.length > 0) {
+      return;
+    }
+
+    const waiters = this.idleWaiters.splice(0, this.idleWaiters.length);
+    for (const resolve of waiters) {
+      resolve();
+    }
   }
 
   private async flush(): Promise<void> {
@@ -86,8 +113,10 @@ class ConversationManageWithDB {
       this.flushing = false;
       // If new messages arrived during flush, process them
       if (this.stack.length > 0) {
-        this.flush();
+        void this.flush();
+        return;
       }
+      this.resolveIdleWaiters();
     }
   }
 }
@@ -110,6 +139,15 @@ export const removeFromMessageCache = (conversation_id: string): void => {
     cached.dispose();
     Cache.delete(conversation_id);
   }
+};
+
+export const drainConversationMessageWrites = async (conversation_id: string): Promise<void> => {
+  const cached = Cache.get(conversation_id);
+  if (!cached) {
+    return;
+  }
+
+  await cached.drain();
 };
 
 /**

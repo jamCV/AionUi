@@ -75,6 +75,52 @@ export function initSchema(db: ISqliteDriver): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_msg_id ON messages(msg_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)');
 
+  db.exec(`CREATE TABLE IF NOT EXISTS conversation_turns (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    request_msg_id TEXT,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER NOT NULL,
+    completion_signal TEXT NOT NULL,
+    completion_source TEXT,
+    review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
+    file_count INTEGER NOT NULL DEFAULT 0,
+    source_message_ids TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS conversation_turn_files (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
+    before_exists INTEGER NOT NULL,
+    after_exists INTEGER NOT NULL,
+    before_hash TEXT,
+    after_hash TEXT,
+    before_content TEXT,
+    after_content TEXT,
+    unified_diff TEXT NOT NULL,
+    source_message_ids TEXT NOT NULL,
+    revert_supported INTEGER NOT NULL DEFAULT 1,
+    revert_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (turn_id) REFERENCES conversation_turns(id) ON DELETE CASCADE,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  )`);
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, completed_at DESC)'
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_turn_files_conversation_path ON conversation_turn_files(conversation_id, file_path)'
+  );
+
   // Teams table (团队模式)
   db.exec(`CREATE TABLE IF NOT EXISTS teams (
     id TEXT PRIMARY KEY,
@@ -151,4 +197,4 @@ export function setDatabaseVersion(db: ISqliteDriver, version: number): void {
  * Current database schema version
  * Update this when adding new migrations in migrations.ts
  */
-export const CURRENT_DB_VERSION = 22;
+export const CURRENT_DB_VERSION = 23;

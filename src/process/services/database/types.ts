@@ -4,19 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// 复用现有的业务类型定义
-import type { ConversationSource, TChatConversation, IConfigStorageRefer } from '@/common/config/storage';
 import type { TMessage } from '@/common/chat/chatLib';
+import type { ConversationSource, IConfigStorageRefer, TChatConversation } from '@/common/config/storage';
+import type {
+  TurnFileAction,
+  TurnReviewStatus,
+  TurnSnapshot,
+  TurnSnapshotFile,
+  TurnSnapshotSummary,
+} from '@/common/types/turnSnapshot';
 
 /**
  * ======================
- * 数据库专属类型 (新增功能)
+ * Database-only types
  * ======================
  */
 
-/**
- * User account (新增的账户系统)
- */
 export interface IUser {
   id: string;
   username: string;
@@ -29,26 +32,18 @@ export interface IUser {
   last_login?: number | null;
 }
 
-// Image metadata removed - images are stored in filesystem and referenced via message.resultDisplay
-
 /**
  * ======================
- * 数据库查询辅助类型
+ * Query helpers
  * ======================
  */
 
-/**
- * Database query result wrapper
- */
 export interface IQueryResult<T> {
   success: boolean;
   data?: T;
   error?: string;
 }
 
-/**
- * Paginated query result
- */
 export interface IPaginatedResult<T> {
   data: T[];
   total: number;
@@ -59,60 +54,85 @@ export interface IPaginatedResult<T> {
 
 /**
  * ======================
- * 数据库存储格式 (序列化后的格式)
+ * Database row types
  * ======================
  */
 
-/**
- * Conversation stored in database (序列化后的格式)
- */
 export interface IConversationRow {
   id: string;
   user_id: string;
   name: string;
   type: string;
-  extra: string; // JSON string of extra data
-  model?: string; // JSON string of TProviderWithModel (gemini type has this)
+  extra: string;
+  model?: string;
   status?: 'pending' | 'running' | 'finished';
-  source?: ConversationSource; // 会话来源 / Conversation source
-  channel_chat_id?: string; // Channel chat isolation ID (e.g. user:xxx or group:xxx)
+  source?: ConversationSource;
+  channel_chat_id?: string;
   created_at: number;
   updated_at: number;
 }
 
-/**
- * Message stored in database (序列化后的格式)
- */
 export interface IMessageRow {
   id: string;
   conversation_id: string;
-  msg_id?: string; // 消息来源ID
-  type: string; // TMessage['type']
-  content: string; // JSON string of message content
+  msg_id?: string;
+  type: string;
+  content: string;
   position?: 'left' | 'right' | 'center' | 'pop';
   status?: 'finish' | 'pending' | 'error' | 'work';
-  hidden?: number; // 0 or 1, maps to boolean IMessage.hidden
+  hidden?: number;
   created_at: number;
 }
 
-/**
- * Config stored in database (key-value, 用于数据库版本跟踪)
- */
 export interface IConfigRow {
   key: string;
-  value: string; // JSON string
+  value: string;
   updated_at: number;
 }
 
+export type TurnSnapshotRow = {
+  id: string;
+  conversation_id: string;
+  backend: string;
+  request_msg_id: string | null;
+  started_at: number;
+  completed_at: number;
+  completion_signal: string;
+  completion_source: string | null;
+  review_status: TurnReviewStatus;
+  file_count: number;
+  source_message_ids: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TurnSnapshotFileRow = {
+  id: string;
+  turn_id: string;
+  conversation_id: string;
+  file_path: string;
+  file_name: string;
+  action: TurnFileAction;
+  before_exists: number;
+  after_exists: number;
+  before_hash: string | null;
+  after_hash: string | null;
+  before_content: string | null;
+  after_content: string | null;
+  unified_diff: string;
+  source_message_ids: string;
+  revert_supported: number;
+  revert_error: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
 /**
  * ======================
- * 类型转换函数
+ * Conversion helpers
  * ======================
  */
 
-/**
- * Convert TChatConversation to database row
- */
 export function conversationToRow(conversation: TChatConversation, userId: string): IConversationRow {
   return {
     id: conversation.id,
@@ -129,9 +149,6 @@ export function conversationToRow(conversation: TChatConversation, userId: strin
   };
 }
 
-/**
- * Convert database row to TChatConversation
- */
 export function rowToConversation(row: IConversationRow): TChatConversation {
   const base = {
     id: row.id,
@@ -144,7 +161,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     channelChatId: row.channel_chat_id,
   };
 
-  // Gemini type has model field
   if (row.type === 'gemini' && row.model) {
     return {
       ...base,
@@ -154,7 +170,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // ACP type
   if (row.type === 'acp') {
     return {
       ...base,
@@ -163,7 +178,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // Codex type
   if (row.type === 'codex') {
     return {
       ...base,
@@ -172,7 +186,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // OpenClaw Gateway type
   if (row.type === 'openclaw-gateway') {
     return {
       ...base,
@@ -181,7 +194,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // Nanobot type
   if (row.type === 'nanobot') {
     return {
       ...base,
@@ -190,7 +202,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // Aionrs type has model field
   if (row.type === 'aionrs' && row.model) {
     return {
       ...base,
@@ -200,7 +211,6 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // Remote type
   if (row.type === 'remote') {
     return {
       ...base,
@@ -209,13 +219,9 @@ export function rowToConversation(row: IConversationRow): TChatConversation {
     } as TChatConversation;
   }
 
-  // Unknown type - should never happen with valid data
   throw new Error(`Unknown conversation type: ${row.type}`);
 }
 
-/**
- * Convert TMessage to database row
- */
 export function messageToRow(message: TMessage): IMessageRow {
   return {
     id: message.id,
@@ -230,9 +236,6 @@ export function messageToRow(message: TMessage): IMessageRow {
   };
 }
 
-/**
- * Convert database row to TMessage
- */
 export function rowToMessage(row: IMessageRow): TMessage {
   return {
     id: row.id,
@@ -247,15 +250,124 @@ export function rowToMessage(row: IMessageRow): TMessage {
   } as TMessage;
 }
 
-/**
- * ======================
- * 导出类型别名，方便使用
- * ======================
- */
+const parseStringArray = (rawValue: string): string[] => {
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue);
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+    return parsedValue.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+};
+
+export type CreateTurnSnapshotFileInput = Omit<TurnSnapshotFile, 'createdAt' | 'updatedAt'> & {
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type CreateTurnSnapshotInput = Omit<TurnSnapshot, 'fileCount' | 'createdAt' | 'updatedAt' | 'files'> & {
+  createdAt?: number;
+  updatedAt?: number;
+  files: CreateTurnSnapshotFileInput[];
+};
+
+export function turnSnapshotToRow(snapshot: CreateTurnSnapshotInput): TurnSnapshotRow {
+  const createdAt = snapshot.createdAt ?? Date.now();
+  const updatedAt = snapshot.updatedAt ?? createdAt;
+
+  return {
+    id: snapshot.id,
+    conversation_id: snapshot.conversationId,
+    backend: snapshot.backend,
+    request_msg_id: snapshot.requestMessageId ?? null,
+    started_at: snapshot.startedAt,
+    completed_at: snapshot.completedAt,
+    completion_signal: snapshot.completionSignal,
+    completion_source: snapshot.completionSource ?? null,
+    review_status: snapshot.reviewStatus,
+    file_count: snapshot.files.length,
+    source_message_ids: JSON.stringify(snapshot.sourceMessageIds),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export function turnSnapshotFileToRow(file: CreateTurnSnapshotFileInput): TurnSnapshotFileRow {
+  const createdAt = file.createdAt ?? Date.now();
+  const updatedAt = file.updatedAt ?? createdAt;
+
+  return {
+    id: file.id,
+    turn_id: file.turnId,
+    conversation_id: file.conversationId,
+    file_path: file.filePath,
+    file_name: file.fileName,
+    action: file.action,
+    before_exists: file.beforeExists ? 1 : 0,
+    after_exists: file.afterExists ? 1 : 0,
+    before_hash: file.beforeHash ?? null,
+    after_hash: file.afterHash ?? null,
+    before_content: file.beforeContent ?? null,
+    after_content: file.afterContent ?? null,
+    unified_diff: file.unifiedDiff,
+    source_message_ids: JSON.stringify(file.sourceMessageIds),
+    revert_supported: file.revertSupported ? 1 : 0,
+    revert_error: file.revertError ?? null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export function rowToTurnSnapshotSummary(row: TurnSnapshotRow): TurnSnapshotSummary {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    backend: row.backend,
+    requestMessageId: row.request_msg_id ?? undefined,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    completionSignal: row.completion_signal,
+    completionSource: row.completion_source ?? undefined,
+    reviewStatus: row.review_status,
+    fileCount: row.file_count,
+    sourceMessageIds: parseStringArray(row.source_message_ids),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function rowToTurnSnapshotFile(row: TurnSnapshotFileRow): TurnSnapshotFile {
+  return {
+    id: row.id,
+    turnId: row.turn_id,
+    conversationId: row.conversation_id,
+    filePath: row.file_path,
+    fileName: row.file_name,
+    action: row.action,
+    beforeExists: row.before_exists === 1,
+    afterExists: row.after_exists === 1,
+    beforeHash: row.before_hash ?? undefined,
+    afterHash: row.after_hash ?? undefined,
+    beforeContent: row.before_content ?? undefined,
+    afterContent: row.after_content ?? undefined,
+    unifiedDiff: row.unified_diff,
+    sourceMessageIds: parseStringArray(row.source_message_ids),
+    revertSupported: row.revert_supported === 1,
+    revertError: row.revert_error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 export type {
-  // 复用的业务类型
   TChatConversation,
   TMessage,
   IConfigStorageRefer,
+  TurnFileAction,
+  TurnReviewStatus,
+  TurnSnapshot,
+  TurnSnapshotFile,
+  TurnSnapshotSummary,
 };

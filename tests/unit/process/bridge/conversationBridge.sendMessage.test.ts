@@ -2,6 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Capture all provider callbacks registered during initConversationBridge
 const providerCallbacks = new Map<string, (...args: unknown[]) => unknown>();
+const mockTurnSnapshotCoordinator = {
+  startTurn: vi.fn(),
+  discardTurn: vi.fn(),
+};
+const mockTurnSnapshotService = {
+  listTurnSnapshots: vi.fn(),
+  getTurnSnapshot: vi.fn(),
+  keepTurn: vi.fn(),
+  revertTurn: vi.fn(),
+};
 
 function mockProvider(name: string) {
   return {
@@ -36,6 +46,12 @@ vi.mock('@/common', () => ({
       confirmMessage: mockProvider('conversation.confirmMessage'),
       listChanged: { emit: vi.fn() },
       listByCronJob: mockProvider('conversation.listByCronJob'),
+      turnSnapshot: {
+        list: mockProvider('conversation.turnSnapshot.list'),
+        get: mockProvider('conversation.turnSnapshot.get'),
+        keep: mockProvider('conversation.turnSnapshot.keep'),
+        revert: mockProvider('conversation.turnSnapshot.revert'),
+      },
       responseStream: { emit: vi.fn() },
       confirmation: {
         confirm: mockProvider('conversation.confirmation.confirm'),
@@ -49,6 +65,14 @@ vi.mock('@/common', () => ({
       snapshotListChanged: { emit: vi.fn() },
     },
   },
+}));
+
+vi.mock('@/process/bridge/services/TurnSnapshotCoordinator', () => ({
+  turnSnapshotCoordinator: mockTurnSnapshotCoordinator,
+}));
+
+vi.mock('@/process/bridge/services/TurnSnapshotService', () => ({
+  turnSnapshotService: mockTurnSnapshotService,
 }));
 
 // Mock all external dependencies
@@ -92,6 +116,7 @@ const { initConversationBridge } = await import('@/process/bridge/conversationBr
 describe('conversationBridge.sendMessage', () => {
   const mockConversationService = {
     create: vi.fn(),
+    getConversation: vi.fn(),
     getById: vi.fn(),
     remove: vi.fn(),
     update: vi.fn(),
@@ -149,6 +174,11 @@ describe('conversationBridge.sendMessage', () => {
       workspace: '/mock/workspace',
       sendMessage: vi.fn(async () => undefined),
     };
+    mockConversationService.getConversation.mockResolvedValue({
+      id: 'acp-conversation',
+      type: 'acp',
+      extra: { backend: 'claude' },
+    });
     mockWorkerTaskManager.getOrBuildTask.mockResolvedValue(task);
 
     const result = await handler!({
@@ -165,5 +195,58 @@ describe('conversationBridge.sendMessage', () => {
         agentContent: 'hello',
       })
     );
+  });
+
+  it('starts a turn snapshot before sending ACP messages', async () => {
+    const handler = providerCallbacks.get('conversation.sendMessage');
+    const task = {
+      type: 'acp',
+      workspace: '/mock/workspace',
+      sendMessage: vi.fn(async () => undefined),
+    };
+    mockConversationService.getConversation.mockResolvedValue({
+      id: 'acp-conversation',
+      type: 'acp',
+      extra: { backend: 'claude' },
+    });
+    mockWorkerTaskManager.getOrBuildTask.mockResolvedValue(task);
+
+    const result = await handler!({
+      conversation_id: 'acp-conversation',
+      input: 'hello',
+      msg_id: 'msg-42',
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(mockTurnSnapshotCoordinator.startTurn).toHaveBeenCalledWith({
+      conversationId: 'acp-conversation',
+      backend: 'acp:claude',
+      requestMessageId: 'msg-42',
+    });
+  });
+
+  it('discards the turn snapshot when sendMessage returns a failed result', async () => {
+    const handler = providerCallbacks.get('conversation.sendMessage');
+    const task = {
+      type: 'acp',
+      workspace: '/mock/workspace',
+      sendMessage: vi.fn(async () => ({ success: false })),
+    };
+    mockConversationService.getConversation.mockResolvedValue({
+      id: 'acp-conversation',
+      type: 'acp',
+      extra: { backend: 'claude' },
+    });
+    mockWorkerTaskManager.getOrBuildTask.mockResolvedValue(task);
+
+    const result = await handler!({
+      conversation_id: 'acp-conversation',
+      input: 'hello',
+      msg_id: 'msg-43',
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(mockTurnSnapshotCoordinator.startTurn).toHaveBeenCalled();
+    expect(mockTurnSnapshotCoordinator.discardTurn).toHaveBeenCalledWith('acp-conversation');
   });
 });

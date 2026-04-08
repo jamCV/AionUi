@@ -47,6 +47,7 @@ vi.mock('@/common/chat/chatLib', () => ({
 import {
   addMessage,
   addOrUpdateMessage,
+  drainConversationMessageWrites,
   removeFromMessageCache,
   executePendingCallbacks,
   nextTickToLocalFinish,
@@ -164,6 +165,32 @@ describe('message queue (ConversationManageWithDB)', () => {
 
     expect(consoleSpy).toHaveBeenCalledWith('[Message] flush error:', expect.any(Error));
     consoleSpy.mockRestore();
+  });
+
+  it('drainConversationMessageWrites waits for queued writes to flush', async () => {
+    const msg = {
+      id: 'msg-drain',
+      msg_id: 'msg-drain',
+      type: 'text',
+      position: 'left',
+      conversation_id: 'conv-drain',
+    } as any;
+
+    addOrUpdateMessage('conv-drain', msg);
+
+    let drained = false;
+    const drainPromise = drainConversationMessageWrites('conv-drain').then(() => {
+      drained = true;
+    });
+
+    expect(drained).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await drainPromise;
+
+    expect(drained).toBe(true);
+    expect(mockDb.getConversationMessages).toHaveBeenCalledWith('conv-drain', 0, 50, 'DESC');
   });
 
   it('flush re-runs if new messages arrive during flush', async () => {

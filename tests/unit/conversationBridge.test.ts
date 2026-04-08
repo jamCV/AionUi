@@ -34,6 +34,12 @@ vi.mock('../../src/common', () => ({
       getWorkspace: makeChannel('getWorkspace'),
       responseSearchWorkSpace: makeChannel('responseSearchWorkSpace'),
       warmup: makeChannel('warmup'),
+      turnSnapshot: {
+        list: makeChannel('turnSnapshot.list'),
+        get: makeChannel('turnSnapshot.get'),
+        keep: makeChannel('turnSnapshot.keep'),
+        revert: makeChannel('turnSnapshot.revert'),
+      },
       confirmation: {
         confirm: makeChannel('confirmation.confirm'),
         list: makeChannel('confirmation.list'),
@@ -76,6 +82,22 @@ vi.mock('../../src/process/utils/openclawUtils', () => ({
 
 vi.mock('../../src/process/task/agentUtils', () => ({
   prepareFirstMessage: vi.fn(async (msg: string) => msg),
+}));
+
+vi.mock('../../src/process/bridge/services/TurnSnapshotCoordinator', () => ({
+  turnSnapshotCoordinator: {
+    startTurn: vi.fn(),
+    discardTurn: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/process/bridge/services/TurnSnapshotService', () => ({
+  turnSnapshotService: {
+    listTurnSnapshots: vi.fn(),
+    getTurnSnapshot: vi.fn(),
+    keepTurn: vi.fn(),
+    revertTurn: vi.fn(),
+  },
 }));
 
 import { initConversationBridge } from '../../src/process/bridge/conversationBridge';

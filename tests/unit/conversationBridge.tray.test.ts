@@ -75,6 +75,12 @@ const registerMocks = () => {
         responseStream: { emit: vi.fn() },
         listChanged: { emit: vi.fn() },
         listByCronJob: createCommand('conversation.listByCronJob'),
+        turnSnapshot: {
+          list: createCommand('conversation.turnSnapshot.list'),
+          get: createCommand('conversation.turnSnapshot.get'),
+          keep: createCommand('conversation.turnSnapshot.keep'),
+          revert: createCommand('conversation.turnSnapshot.revert'),
+        },
         confirmation: {
           confirm: createCommand('conversation.confirmation.confirm'),
           list: createCommand('conversation.confirmation.list'),
@@ -111,6 +117,22 @@ const registerMocks = () => {
 
   vi.doMock('@process/bridge/migrationUtils', () => ({
     migrateConversationToDatabase: vi.fn(),
+  }));
+
+  vi.doMock('@/process/bridge/services/TurnSnapshotCoordinator', () => ({
+    turnSnapshotCoordinator: {
+      startTurn: vi.fn(),
+      discardTurn: vi.fn(),
+    },
+  }));
+
+  vi.doMock('@/process/bridge/services/TurnSnapshotService', () => ({
+    turnSnapshotService: {
+      listTurnSnapshots: vi.fn(),
+      getTurnSnapshot: vi.fn(),
+      keepTurn: vi.fn(),
+      revertTurn: vi.fn(),
+    },
   }));
 };
 

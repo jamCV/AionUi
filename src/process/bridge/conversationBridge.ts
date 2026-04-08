@@ -31,6 +31,8 @@ import fs from 'fs';
 import path from 'path';
 import { migrateConversationToDatabase } from './migrationUtils';
 import { ConversationSideQuestionService } from './services/ConversationSideQuestionService';
+import { turnSnapshotCoordinator } from './services/TurnSnapshotCoordinator';
+import { turnSnapshotService } from './services/TurnSnapshotService';
 
 const refreshTrayMenuSafely = async (): Promise<void> => {
   try {
@@ -49,6 +51,31 @@ const VALID_CONVERSATION_TYPES = new Set<TChatConversation['type']>([
   'remote',
   'aionrs',
 ]);
+
+const resolveTurnBackend = (conversation: TChatConversation | undefined, task: IAgentManager): string | undefined => {
+  const conversationType = conversation ? (conversation.type as string) : undefined;
+
+  if (conversationType === 'acp') {
+    const backend =
+      conversation?.extra && 'backend' in conversation.extra
+        ? String((conversation.extra as { backend?: string }).backend || 'acp')
+        : 'acp';
+    return `acp:${backend}`;
+  }
+
+  if (conversationType === 'codex') {
+    return 'codex';
+  }
+
+  if (task.type === 'acp') {
+    return 'acp';
+  }
+
+  return undefined;
+};
+
+const isFailedSendResult = (result: unknown): result is { success: false } =>
+  !!result && typeof result === 'object' && 'success' in result && result.success === false;
 
 export function initConversationBridge(
   conversationService: IConversationService,
@@ -210,6 +237,22 @@ export function initConversationBridge(
 
   ipcBridge.conversation.listByCronJob.provider(async ({ cronJobId }) => {
     return conversationService.getConversationsByCronJob(cronJobId);
+  });
+
+  ipcBridge.conversation.turnSnapshot.list.provider(async ({ conversation_id, limit = 50 }) => {
+    return turnSnapshotService.listTurnSnapshots(conversation_id, limit);
+  });
+
+  ipcBridge.conversation.turnSnapshot.get.provider(async ({ turnId }) => {
+    return (await turnSnapshotService.getTurnSnapshot(turnId)) ?? null;
+  });
+
+  ipcBridge.conversation.turnSnapshot.keep.provider(async ({ turnId }) => {
+    return turnSnapshotService.keepTurn(turnId);
+  });
+
+  ipcBridge.conversation.turnSnapshot.revert.provider(async ({ turnId }) => {
+    return turnSnapshotService.revertTurn(turnId);
   });
 
   ipcBridge.conversation.createWithConversation.provider(
@@ -475,6 +518,7 @@ export function initConversationBridge(
       return { success: false, msg: 'Missing request parameters' };
     }
     const { conversation_id, files, ...other } = params;
+    const conversation = await conversationService.getConversation(conversation_id);
     let task: IAgentManager | undefined;
     try {
       task = await workerTaskManager.getOrBuildTask(conversation_id);
@@ -488,6 +532,15 @@ export function initConversationBridge(
 
     if (!task) {
       return { success: false, msg: 'conversation not found' };
+    }
+
+    const turnBackend = resolveTurnBackend(conversation, task);
+    if (turnBackend) {
+      await turnSnapshotCoordinator.startTurn({
+        conversationId: conversation_id,
+        backend: turnBackend,
+        requestMessageId: other.msg_id,
+      });
     }
 
     // Handle file paths based on agent type
@@ -532,12 +585,15 @@ export function initConversationBridge(
       // Pass unified data — each agent reads the fields it needs from the unknown payload.
       // `content` aliases `input` for ACP/Codex/NanoBot/OpenClaw agents.
       // `agentContent` carries the skill-injected text for OpenClaw (equals `input` when no skills).
-      await task.sendMessage({
+      const result = (await task.sendMessage({
         ...other,
         content: other.input,
         files: workspaceFiles,
         agentContent,
-      });
+      })) as unknown;
+      if (turnBackend && isFailedSendResult(result)) {
+        turnSnapshotCoordinator.discardTurn(conversation_id);
+      }
 
       // Defer cleanup until after Gemini worker finishes processing the files.
       // sendMessage() resolves when the worker acknowledges receipt, but the worker
@@ -567,6 +623,7 @@ export function initConversationBridge(
 
       return { success: true };
     } catch (err: unknown) {
+      turnSnapshotCoordinator.discardTurn(conversation_id);
       return {
         success: false,
         msg: err instanceof Error ? err.message : String(err),
