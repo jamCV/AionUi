@@ -65,5 +65,19 @@
   },
   "atFile.hint": "Введите текст для поиска файлов",
   "atFile.menuLabel": "Упоминания файлов",
-  "atFile.loading": "Загрузка..."
+  "atFile.loading": "Загрузка...",
+  "turnSnapshot": {
+    "keep": "Keep This Turn",
+    "revert": "Revert This Turn",
+    "pending": "Pending Review",
+    "kept": "Kept",
+    "reverted": "Reverted",
+    "conflict": "Conflict detected",
+    "unsupported": "Revert unavailable",
+    "failed": "Revert failed",
+    "keepFailed": "Failed to keep this turn",
+    "revertFailed": "Failed to revert this turn",
+    "keepSuccess": "Turn kept",
+    "revertSuccess": "Turn reverted"
+  }
 }
