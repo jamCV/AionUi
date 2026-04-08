@@ -138,7 +138,7 @@ describe('Acp TurnSummaryPanel', () => {
 
     expect(await screen.findByText('conversation.turnSummary.title')).toBeInTheDocument();
     expect(screen.getByText('messages.turnSnapshot.pending')).toBeInTheDocument();
-    expect(screen.getByText('messages.fileChangesCount:1')).toBeInTheDocument();
+    expect(await screen.findByText('messages.fileChangesCount:1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'conversation.turnSummary.viewChanges' }));
 

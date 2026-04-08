@@ -67,17 +67,17 @@
     "no": "否 (esc)"
   },
   "turnSnapshot": {
-    "keep": "????",
-    "revert": "????",
-    "pending": "???",
-    "kept": "???",
-    "reverted": "???",
-    "conflict": "?????",
-    "unsupported": "??????",
-    "failed": "????",
-    "keepFailed": "??????",
-    "revertFailed": "??????",
-    "keepSuccess": "?????",
-    "revertSuccess": "?????"
+    "keep": "保留本輪",
+    "revert": "還原本輪",
+    "pending": "待處理",
+    "kept": "已保留",
+    "reverted": "已還原",
+    "conflict": "偵測到衝突",
+    "unsupported": "無法安全還原",
+    "failed": "還原失敗",
+    "keepFailed": "保留本輪失敗",
+    "revertFailed": "還原本輪失敗",
+    "keepSuccess": "已保留本輪",
+    "revertSuccess": "已還原本輪"
   }
 }

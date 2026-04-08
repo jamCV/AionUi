@@ -67,17 +67,17 @@
     "no": "否 (esc)"
   },
   "turnSnapshot": {
-    "keep": "????",
-    "revert": "????",
-    "pending": "???",
-    "kept": "???",
-    "reverted": "???",
-    "conflict": "?????",
-    "unsupported": "??????",
-    "failed": "????",
-    "keepFailed": "??????",
-    "revertFailed": "??????",
-    "keepSuccess": "?????",
-    "revertSuccess": "?????"
+    "keep": "保留本轮",
+    "revert": "回退本轮",
+    "pending": "待处理",
+    "kept": "已保留",
+    "reverted": "已回退",
+    "conflict": "检测到冲突",
+    "unsupported": "无法安全回退",
+    "failed": "回退失败",
+    "keepFailed": "保留本轮失败",
+    "revertFailed": "回退本轮失败",
+    "keepSuccess": "已保留本轮",
+    "revertSuccess": "已回退本轮"
   }
 }
