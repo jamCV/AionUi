@@ -578,6 +578,40 @@ describe('platform send box queue integration', () => {
     }
   );
 
+  it('renders an optimistic visible ACP message while keeping the backend payload raw', async () => {
+    render(<AcpSendBox conversation_id='conv-acp-visible' backend='claude' />);
+
+    await waitFor(() => {
+      expect(mockConversationGetInvoke).toHaveBeenCalledWith({ id: 'conv-acp-visible' });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'trigger-send' }));
+
+    await waitFor(() => {
+      expect(mockAcpSendInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mockAddOrUpdateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg_id: 'uuid-1',
+        conversation_id: 'conv-acp-visible',
+        position: 'right',
+        content: {
+          content: 'queued command||C:/workspace',
+        },
+      }),
+      true
+    );
+    expect(mockAcpSendInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 'queued command',
+        msg_id: 'uuid-1',
+        conversation_id: 'conv-acp-visible',
+        files: [],
+      })
+    );
+  });
+
   it.each([
     ['acp', <AcpSendBox conversation_id='conv-acp' backend='claude' />],
     [

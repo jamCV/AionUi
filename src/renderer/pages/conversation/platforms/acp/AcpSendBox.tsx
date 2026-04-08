@@ -17,6 +17,7 @@ import { assertBridgeSuccess } from '@/renderer/pages/conversation/platforms/ass
 import { allSupportedExts } from '@/renderer/services/FileService';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { mergeFileSelectionItems } from '@/renderer/utils/file/fileSelection';
+import { buildDisplayMessage, collectSelectedFiles } from '@/renderer/utils/file/messageFiles';
 import { Message, Tag } from '@arco-design/web-react';
 import { Shield } from '@icon-park/react';
 import { iconColors } from '@/renderer/styles/colors';
@@ -109,6 +110,7 @@ const AcpSendBox: React.FC<{
   const slashCommands = useSlashCommands(conversation_id, { agentStatus: acpStatus });
   const { atPath, uploadFile, setAtPath, setUploadFile, content, setContent } = useSendBoxDraft(conversation_id);
   const { setSendBoxHandler } = usePreviewContext();
+  const [workspacePath, setWorkspacePath] = React.useState<string | null>(null);
 
   // Use useLatestRef to keep latest setters to avoid re-registering handler
   const setContentRef = useLatestRef(setContent);
@@ -148,11 +150,35 @@ const AcpSendBox: React.FC<{
   // Check for and send initial message from guid page
   useAcpInitialMessage({
     conversationId: conversation_id,
+    workspacePath,
     backend,
     setAiProcessing,
     checkAndUpdateTitle,
     addOrUpdateMessage: addOrUpdateMessageRef.current,
   });
+
+  useEffect(() => {
+    let mounted = true;
+
+    void ipcBridge.conversation.get
+      .invoke({ id: conversation_id })
+      .then((conversation) => {
+        if (!mounted) {
+          return;
+        }
+        const workspace = conversation?.extra?.workspace;
+        setWorkspacePath(typeof workspace === 'string' ? workspace : '');
+      })
+      .catch(() => {
+        if (mounted) {
+          setWorkspacePath('');
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [conversation_id]);
 
   const executeCommand = useCallback(
     async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {
@@ -181,6 +207,21 @@ const AcpSendBox: React.FC<{
             }
           }
         } else {
+          const displayMessage = buildDisplayMessage(input, files, workspacePath || '');
+          addOrUpdateMessage(
+            {
+              id: msg_id,
+              msg_id,
+              conversation_id,
+              type: 'text',
+              position: 'right',
+              content: {
+                content: displayMessage,
+              },
+              createdAt: Date.now(),
+            },
+            true
+          );
           const result = await ipcBridge.acpConversation.sendMessage.invoke({
             input,
             msg_id,
@@ -224,7 +265,7 @@ Please check your local CLI tool authentication status`,
         emitter.emit('acp.workspace.refresh');
       }
     },
-    [agentSlotId, backend, checkAndUpdateTitle, conversation_id, setAiProcessing, t, teamId]
+    [agentSlotId, backend, checkAndUpdateTitle, conversation_id, setAiProcessing, t, teamId, workspacePath]
   );
 
   const {
@@ -256,8 +297,7 @@ Please check your local CLI tool authentication status`,
       return;
     }
 
-    const atPathFiles = atPath.map((item) => (typeof item === 'string' ? item : item.path));
-    const allFiles = [...uploadFile, ...atPathFiles];
+    const allFiles = collectSelectedFiles(uploadFile, atPath);
 
     clearFiles();
     emitter.emit('acp.selected.file.clear');

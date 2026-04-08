@@ -7,11 +7,13 @@
 import { ipcBridge } from '@/common';
 import type { TMessage } from '@/common/chat/chatLib';
 import { uuid } from '@/common/utils';
+import { buildDisplayMessage } from '@/renderer/utils/file/messageFiles';
 import { emitter } from '@/renderer/utils/emitter';
 import { useEffect } from 'react';
 
 type UseAcpInitialMessageParams = {
   conversationId: string;
+  workspacePath: string | null;
   backend: string;
   setAiProcessing: (value: boolean) => void;
   checkAndUpdateTitle: (conversationId: string, input: string) => void;
@@ -24,6 +26,7 @@ type UseAcpInitialMessageParams = {
  */
 export const useAcpInitialMessage = ({
   conversationId,
+  workspacePath,
   backend,
   setAiProcessing,
   checkAndUpdateTitle,
@@ -34,6 +37,7 @@ export const useAcpInitialMessage = ({
     const storedMessage = sessionStorage.getItem(storageKey);
 
     if (!storedMessage) return;
+    if (workspacePath === null) return;
 
     // Clear immediately to prevent duplicate sends (e.g., if component remounts while sendMessage is pending)
     sessionStorage.removeItem(storageKey);
@@ -42,13 +46,23 @@ export const useAcpInitialMessage = ({
       try {
         const initialMessage = JSON.parse(storedMessage);
         const { input, files } = initialMessage;
-
-        // ACP: don't use buildDisplayMessage, pass raw input directly
-        // File references are added by the backend ACP agent (using actual copied paths)
-        // Avoid two inconsistent sets of file references in the message
         const msg_id = uuid();
+        const displayMessage = buildDisplayMessage(input, files, workspacePath);
+        const userMessage: TMessage = {
+          id: msg_id,
+          msg_id,
+          conversation_id: conversationId,
+          type: 'text',
+          position: 'right',
+          content: {
+            content: displayMessage,
+          },
+          createdAt: Date.now(),
+        };
 
-        // Start AI processing loading state (user message will be added via backend response)
+        addOrUpdateMessage(userMessage, true);
+
+        // Start AI processing loading state while keeping ACP's raw backend payload unchanged.
         setAiProcessing(true);
 
         // Send the message
@@ -63,6 +77,9 @@ export const useAcpInitialMessage = ({
         if (result && result.success === true) {
           // Initial message sent successfully
           emitter.emit('chat.history.refresh');
+          if (files && files.length > 0) {
+            emitter.emit('acp.workspace.refresh');
+          }
         } else {
           // Handle send failure
           console.error('[ACP-FRONTEND] Failed to send initial message:', result);
@@ -91,5 +108,5 @@ export const useAcpInitialMessage = ({
     sendInitialMessage().catch((error) => {
       console.error('Failed to send initial message:', error);
     });
-  }, [conversationId, backend]);
+  }, [addOrUpdateMessage, backend, checkAndUpdateTitle, conversationId, setAiProcessing, workspacePath]);
 };
