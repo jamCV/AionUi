@@ -6,6 +6,53 @@
 
 import type { ISqliteDriver } from './drivers/ISqliteDriver';
 
+type TableInfoRow = {
+  name?: string;
+};
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function getTableColumns(db: ISqliteDriver, tableName: string): Set<string> {
+  try {
+    const rows = db.pragma(`table_info(${quoteIdentifier(tableName)})`) as TableInfoRow[] | undefined;
+    if (!Array.isArray(rows)) {
+      return new Set();
+    }
+
+    return new Set(
+      rows
+        .map((row) => row?.name)
+        .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function archiveLegacyTableIfMissingColumns(
+  db: ISqliteDriver,
+  tableName: string,
+  requiredColumns: string[]
+): void {
+  const columns = getTableColumns(db, tableName);
+  if (columns.size === 0) {
+    return;
+  }
+
+  const missingColumns = requiredColumns.filter((column) => !columns.has(column));
+  if (missingColumns.length === 0) {
+    return;
+  }
+
+  const archivedName = `${tableName}_legacy_${Date.now()}`;
+  console.warn(
+    `[Database] Archiving legacy ${tableName} table as ${archivedName}; missing columns: ${missingColumns.join(', ')}`
+  );
+  db.exec(`ALTER TABLE ${quoteIdentifier(tableName)} RENAME TO ${quoteIdentifier(archivedName)}`);
+}
+
 /**
  * Initialize database schema with all tables and indexes
  */
@@ -138,6 +185,15 @@ export function initSchema(db: ISqliteDriver): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_teams_updated_at ON teams(updated_at)');
 
   // Mailbox table (团队消息邮箱)
+  archiveLegacyTableIfMissingColumns(db, 'mailbox', [
+    'team_id',
+    'to_agent_id',
+    'from_agent_id',
+    'type',
+    'content',
+    'read',
+    'created_at',
+  ]);
   db.exec(`CREATE TABLE IF NOT EXISTS mailbox (
     id TEXT PRIMARY KEY,
     team_id TEXT NOT NULL,
@@ -153,6 +209,16 @@ export function initSchema(db: ISqliteDriver): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_mailbox_to ON mailbox(team_id, to_agent_id, read)');
 
   // Team tasks table (团队任务)
+  archiveLegacyTableIfMissingColumns(db, 'team_tasks', [
+    'team_id',
+    'subject',
+    'status',
+    'blocked_by',
+    'blocks',
+    'metadata',
+    'created_at',
+    'updated_at',
+  ]);
   db.exec(`CREATE TABLE IF NOT EXISTS team_tasks (
     id TEXT PRIMARY KEY,
     team_id TEXT NOT NULL,

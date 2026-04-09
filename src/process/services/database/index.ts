@@ -59,6 +59,18 @@ import {
   decryptString,
 } from '@process/channels/utils/credentialCrypto';
 
+function shouldAttemptRecovery(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
+  return [
+    'database disk image is malformed',
+    'file is not a database',
+    'database is corrupted',
+    'database corrupt',
+    'sqlite_corrupt',
+    'encrypted or is not a database',
+  ].some((fragment) => normalized.includes(fragment));
+}
+
 type IConversationMessageSearchRow = IConversationRow & {
   message_id: string;
   message_type: TMessage['type'];
@@ -149,6 +161,10 @@ export class AionUIDatabase {
           '[Database] Native module load error — will NOT attempt recovery (database is likely intact):',
           msg
         );
+        throw error;
+      }
+      if (!shouldAttemptRecovery(msg)) {
+        console.error('[Database] Initialization failed without file recovery (database file left untouched):', error);
         throw error;
       }
       console.error('[Database] Failed to initialize, attempting recovery...', error);

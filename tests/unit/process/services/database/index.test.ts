@@ -155,4 +155,23 @@ describe('AionUIDatabase.create recovery', () => {
 
     expect(unlinkSpy).toHaveBeenCalledWith('/tmp/test.db');
   });
+
+  it('does not attempt file recovery for schema mismatch errors', async () => {
+    const failedDriver = createMockDriver();
+
+    vi.mocked(createDriver).mockResolvedValueOnce(failedDriver);
+
+    vi.mocked(initSchema).mockImplementationOnce(() => {
+      throw new Error('no such column: team_id');
+    });
+
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => undefined as never);
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => undefined as never);
+
+    await expect(AionUIDatabase.create('/tmp/test.db')).rejects.toThrow('no such column: team_id');
+
+    expect(failedDriver.close).toHaveBeenCalledOnce();
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(unlinkSpy).not.toHaveBeenCalled();
+  });
 });
