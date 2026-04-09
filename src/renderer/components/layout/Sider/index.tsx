@@ -49,7 +49,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
   const { teams, mutate: refreshTeams, removeTeam } = useTeamList();
   const { mutate: globalMutate } = useSWRConfig();
 
-  // Pin state
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(TEAM_PINNED_KEY) ?? '[]') as string[];
@@ -66,7 +65,6 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
     });
   }, []);
 
-  // Rename state
   const [renameVisible, setRenameVisible] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameName, setRenameName] = useState('');
@@ -89,9 +87,8 @@ const Sider: React.FC<SiderProps> = ({ onSessionClick, collapsed = false }) => {
     } finally {
       setRenameLoading(false);
     }
-  }, [renameId, renameName, refreshTeams, t]);
+  }, [globalMutate, refreshTeams, renameId, renameName, t]);
 
-  // Sorted teams: pinned first
   const sortedTeams = useMemo(() => {
     const pinned = teams.filter((team) => pinnedIds.includes(team.id));
     const unpinned = teams.filter((team) => !pinnedIds.includes(team.id));
