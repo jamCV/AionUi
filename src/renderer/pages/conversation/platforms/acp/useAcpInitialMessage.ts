@@ -7,14 +7,14 @@
 import { ipcBridge } from '@/common';
 import type { TMessage } from '@/common/chat/chatLib';
 import { uuid } from '@/common/utils';
-import { buildDisplayMessage } from '@/renderer/utils/file/messageFiles';
 import { emitter } from '@/renderer/utils/emitter';
+import { buildDisplayMessage } from '@/renderer/utils/file/messageFiles';
 import { useEffect } from 'react';
 
 type UseAcpInitialMessageParams = {
   conversationId: string;
-  workspacePath: string | null;
   backend: string;
+  workspacePath: string | null;
   setAiProcessing: (value: boolean) => void;
   checkAndUpdateTitle: (conversationId: string, input: string) => void;
   addOrUpdateMessage: (message: TMessage, prepend?: boolean) => void;
@@ -26,8 +26,8 @@ type UseAcpInitialMessageParams = {
  */
 export const useAcpInitialMessage = ({
   conversationId,
-  workspacePath,
   backend,
+  workspacePath,
   setAiProcessing,
   checkAndUpdateTitle,
   addOrUpdateMessage,
@@ -45,30 +45,18 @@ export const useAcpInitialMessage = ({
     const sendInitialMessage = async () => {
       try {
         const initialMessage = JSON.parse(storedMessage);
-        const { input, files } = initialMessage;
-        const msg_id = uuid();
+        const input = typeof initialMessage.input === 'string' ? initialMessage.input : '';
+        const files = Array.isArray(initialMessage.files) ? initialMessage.files : [];
         const displayMessage = buildDisplayMessage(input, files, workspacePath);
-        const userMessage: TMessage = {
-          id: msg_id,
-          msg_id,
-          conversation_id: conversationId,
-          type: 'text',
-          position: 'right',
-          content: {
-            content: displayMessage,
-          },
-          createdAt: Date.now(),
-        };
+        const msg_id = uuid();
 
-        addOrUpdateMessage(userMessage, true);
-
-        // Start AI processing loading state while keeping ACP's raw backend payload unchanged.
+        // Start AI processing loading state while the persisted user_content message hydrates.
         setAiProcessing(true);
 
         // Send the message
         void checkAndUpdateTitle(conversationId, input);
         const result = await ipcBridge.acpConversation.sendMessage.invoke({
-          input,
+          input: displayMessage,
           msg_id,
           conversation_id: conversationId,
           files,
@@ -77,7 +65,7 @@ export const useAcpInitialMessage = ({
         if (result && result.success === true) {
           // Initial message sent successfully
           emitter.emit('chat.history.refresh');
-          if (files && files.length > 0) {
+          if (files.length > 0) {
             emitter.emit('acp.workspace.refresh');
           }
         } else {

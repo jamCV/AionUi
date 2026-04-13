@@ -50,6 +50,15 @@ const useAcpSendBoxDraft = getSendBoxDraftHook('acp', {
 const EMPTY_AT_PATH: Array<string | FileOrFolderItem> = [];
 const EMPTY_UPLOAD_FILES: string[] = [];
 
+const assertTeamBridgeSuccess = (
+  result: void | { __bridgeError?: boolean; message?: string },
+  fallbackMessage: string
+): void => {
+  if (result && typeof result === 'object' && '__bridgeError' in result && result.__bridgeError) {
+    throw new Error(result.message || fallbackMessage);
+  }
+};
+
 const useSendBoxDraft = (conversation_id: string) => {
   const { data, mutate } = useAcpSendBoxDraft(conversation_id);
   const atPath = data?.atPath ?? EMPTY_AT_PATH;
@@ -88,9 +97,19 @@ const AcpSendBox: React.FC<{
   sessionMode?: string;
   cachedConfigOptions?: import('@/common/types/acpTypes').AcpSessionConfigOption[];
   agentName?: string;
+  workspacePath?: string;
   teamId?: string;
   agentSlotId?: string;
-}> = ({ conversation_id, backend, sessionMode, cachedConfigOptions, agentName, teamId, agentSlotId }) => {
+}> = ({
+  conversation_id,
+  backend,
+  sessionMode,
+  cachedConfigOptions,
+  agentName,
+  workspacePath: initialWorkspacePath,
+  teamId,
+  agentSlotId,
+}) => {
   const {
     running,
     hasHydratedRunningState,
@@ -111,7 +130,7 @@ const AcpSendBox: React.FC<{
   const slashCommands = useSlashCommands(conversation_id, { agentStatus: acpStatus });
   const { atPath, uploadFile, setAtPath, setUploadFile, content, setContent } = useSendBoxDraft(conversation_id);
   const { setSendBoxHandler } = usePreviewContext();
-  const [workspacePath, setWorkspacePath] = React.useState<string | null>(null);
+  const [resolvedWorkspacePath, setResolvedWorkspacePath] = React.useState<string | null>(() => initialWorkspacePath ?? null);
 
   // Use useLatestRef to keep latest setters to avoid re-registering handler
   const setContentRef = useLatestRef(setContent);
@@ -151,14 +170,22 @@ const AcpSendBox: React.FC<{
   // Check for and send initial message from guid page
   useAcpInitialMessage({
     conversationId: conversation_id,
-    workspacePath,
     backend,
+    workspacePath: resolvedWorkspacePath,
     setAiProcessing,
     checkAndUpdateTitle,
     addOrUpdateMessage: addOrUpdateMessageRef.current,
   });
 
   useEffect(() => {
+    setResolvedWorkspacePath(initialWorkspacePath ?? null);
+  }, [initialWorkspacePath]);
+
+  useEffect(() => {
+    if (initialWorkspacePath !== undefined) {
+      return;
+    }
+
     let mounted = true;
 
     void ipcBridge.conversation.get
@@ -168,18 +195,18 @@ const AcpSendBox: React.FC<{
           return;
         }
         const workspace = conversation?.extra?.workspace;
-        setWorkspacePath(typeof workspace === 'string' ? workspace : '');
+        setResolvedWorkspacePath(typeof workspace === 'string' ? workspace : '');
       })
       .catch(() => {
         if (mounted) {
-          setWorkspacePath('');
+          setResolvedWorkspacePath('');
         }
       });
 
     return () => {
       mounted = false;
     };
-  }, [conversation_id]);
+  }, [conversation_id, initialWorkspacePath]);
 
   const executeCommand = useCallback(
     async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {
@@ -196,19 +223,13 @@ const AcpSendBox: React.FC<{
               slotId: agentSlotId,
               content: input,
             });
-            const maybeError = result as unknown as { __bridgeError?: boolean; message?: string };
-            if (maybeError.__bridgeError) {
-              throw new Error(maybeError.message || 'Failed to send message to agent');
-            }
+            assertTeamBridgeSuccess(result, 'Failed to send message to agent');
           } else {
             const result = await ipcBridge.team.sendMessage.invoke({ teamId, content: input });
-            const maybeError = result as unknown as { __bridgeError?: boolean; message?: string };
-            if (maybeError.__bridgeError) {
-              throw new Error(maybeError.message || 'Failed to send message to team');
-            }
+            assertTeamBridgeSuccess(result, 'Failed to send message to team');
           }
         } else {
-          const displayMessage = buildDisplayMessage(input, files, workspacePath || '');
+          const displayMessage = buildDisplayMessage(input, files, resolvedWorkspacePath || '');
           addOrUpdateMessage(
             {
               id: msg_id,
@@ -224,7 +245,7 @@ const AcpSendBox: React.FC<{
             true
           );
           const result = await ipcBridge.acpConversation.sendMessage.invoke({
-            input,
+            input: displayMessage,
             msg_id,
             conversation_id,
             files,
@@ -266,7 +287,7 @@ Please check your local CLI tool authentication status`,
         emitter.emit('acp.workspace.refresh');
       }
     },
-    [agentSlotId, backend, checkAndUpdateTitle, conversation_id, setAiProcessing, t, teamId, workspacePath]
+    [agentSlotId, backend, checkAndUpdateTitle, conversation_id, resolvedWorkspacePath, setAiProcessing, t, teamId]
   );
 
   const {
@@ -292,7 +313,7 @@ Please check your local CLI tool authentication status`,
   });
 
   const onSendHandler = async (message: string) => {
-    if (!isCommandQueueEnabled && isBusy) {
+    if (!teamId && !isCommandQueueEnabled && isBusy) {
       Message.warning(t('messages.conversationInProgress'));
       return;
     }

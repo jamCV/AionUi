@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAcpInitialMessage } from '@/renderer/pages/conversation/platforms/acp/useAcpInitialMessage';
 
 const mockAcpSendInvoke = vi.fn();
+const mockAddOrUpdateMessage = vi.fn();
 const mockEmitterEmit = vi.fn();
-const mockBuildDisplayMessage = vi.fn((input: string, files: string[], workspacePath: string) => {
-  return `${input}|${files.join(',')}|${workspacePath}`;
-});
+const mockBuildDisplayMessage = vi.fn(
+  (input: string, files: string[], workspacePath: string) => `${input}|${files.join(',')}|${workspacePath}`
+);
 
 let uuidCounter = 0;
 
@@ -24,14 +25,14 @@ vi.mock('@/common/utils', () => ({
   uuid: vi.fn(() => `acp-init-${++uuidCounter}`),
 }));
 
-vi.mock('@/renderer/utils/file/messageFiles', () => ({
-  buildDisplayMessage: (...args: [string, string[], string]) => mockBuildDisplayMessage(...args),
-}));
-
 vi.mock('@/renderer/utils/emitter', () => ({
   emitter: {
     emit: (...args: unknown[]) => mockEmitterEmit(...args),
   },
+}));
+
+vi.mock('@/renderer/utils/file/messageFiles', () => ({
+  buildDisplayMessage: (...args: Parameters<typeof mockBuildDisplayMessage>) => mockBuildDisplayMessage(...args),
 }));
 
 describe('useAcpInitialMessage', () => {
@@ -43,7 +44,6 @@ describe('useAcpInitialMessage', () => {
   });
 
   it('waits for workspace hydration before sending the initial ACP message', async () => {
-    const addOrUpdateMessage = vi.fn();
     const { rerender } = renderHook(
       ({ workspacePath }: { workspacePath: string | null }) =>
         useAcpInitialMessage({
@@ -52,7 +52,7 @@ describe('useAcpInitialMessage', () => {
           backend: 'claude',
           setAiProcessing: vi.fn(),
           checkAndUpdateTitle: vi.fn(),
-          addOrUpdateMessage,
+          addOrUpdateMessage: mockAddOrUpdateMessage,
         }),
       {
         initialProps: {
@@ -75,7 +75,7 @@ describe('useAcpInitialMessage', () => {
       expect(mockAcpSendInvoke).not.toHaveBeenCalled();
     });
 
-    expect(addOrUpdateMessage).not.toHaveBeenCalled();
+    expect(mockAddOrUpdateMessage).not.toHaveBeenCalled();
     expect(sessionStorage.getItem('acp_initial_message_conv-hydration')).not.toBeNull();
 
     rerender({ workspacePath: 'C:/workspace' });
@@ -84,35 +84,37 @@ describe('useAcpInitialMessage', () => {
       expect(mockAcpSendInvoke).toHaveBeenCalledTimes(1);
     });
 
+    expect(mockBuildDisplayMessage).toHaveBeenCalledWith('hydrate first', ['C:/workspace/file.txt'], 'C:/workspace');
     expect(mockAcpSendInvoke).toHaveBeenCalledWith({
-      input: 'hydrate first',
+      input: 'hydrate first|C:/workspace/file.txt|C:/workspace',
       msg_id: 'acp-init-1',
       conversation_id: 'conv-hydration',
       files: ['C:/workspace/file.txt'],
     });
+    expect(sessionStorage.getItem('acp_initial_message_conv-hydration')).toBeNull();
+    expect(mockAddOrUpdateMessage).not.toHaveBeenCalled();
   });
 
-  it('adds a visible initial ACP message while sending raw input to the backend', async () => {
-    const addOrUpdateMessage = vi.fn();
+  it('uses display message when the initial ACP prompt includes uploaded files', async () => {
     const setAiProcessing = vi.fn();
     const checkAndUpdateTitle = vi.fn();
 
     sessionStorage.setItem(
-      'acp_initial_message_conv-ready',
+      'acp_initial_message_conv-acp',
       JSON.stringify({
-        input: 'send immediately',
-        files: ['C:/workspace/readme.md'],
+        input: 'describe this image',
+        files: ['C:/workspace/uploads/photo.png'],
       })
     );
 
     renderHook(() =>
       useAcpInitialMessage({
-        conversationId: 'conv-ready',
-        workspacePath: 'C:/workspace',
+        conversationId: 'conv-acp',
         backend: 'claude',
+        workspacePath: 'C:/workspace',
         setAiProcessing,
         checkAndUpdateTitle,
-        addOrUpdateMessage,
+        addOrUpdateMessage: mockAddOrUpdateMessage,
       })
     );
 
@@ -120,33 +122,26 @@ describe('useAcpInitialMessage', () => {
       expect(mockAcpSendInvoke).toHaveBeenCalledTimes(1);
     });
 
-    expect(addOrUpdateMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        msg_id: 'acp-init-1',
-        conversation_id: 'conv-ready',
-        position: 'right',
-        content: {
-          content: 'send immediately|C:/workspace/readme.md|C:/workspace',
-        },
-      }),
-      true
+    expect(mockBuildDisplayMessage).toHaveBeenCalledWith(
+      'describe this image',
+      ['C:/workspace/uploads/photo.png'],
+      'C:/workspace'
     );
     expect(setAiProcessing).toHaveBeenCalledWith(true);
-    expect(checkAndUpdateTitle).toHaveBeenCalledWith('conv-ready', 'send immediately');
+    expect(checkAndUpdateTitle).toHaveBeenCalledWith('conv-acp', 'describe this image');
     expect(mockAcpSendInvoke).toHaveBeenCalledWith({
-      input: 'send immediately',
+      input: 'describe this image|C:/workspace/uploads/photo.png|C:/workspace',
       msg_id: 'acp-init-1',
-      conversation_id: 'conv-ready',
-      files: ['C:/workspace/readme.md'],
+      conversation_id: 'conv-acp',
+      files: ['C:/workspace/uploads/photo.png'],
     });
     expect(mockEmitterEmit).toHaveBeenCalledWith('chat.history.refresh');
     expect(mockEmitterEmit).toHaveBeenCalledWith('acp.workspace.refresh');
-    expect(sessionStorage.getItem('acp_initial_message_conv-ready')).toBeNull();
+    expect(sessionStorage.getItem('acp_initial_message_conv-acp')).toBeNull();
+    expect(mockAddOrUpdateMessage).not.toHaveBeenCalled();
   });
 
   it('shows an error tip and stops loading when the ACP initial send fails', async () => {
-    const addOrUpdateMessage = vi.fn();
     const setAiProcessing = vi.fn();
 
     mockAcpSendInvoke.mockResolvedValue({ success: false });
@@ -165,25 +160,15 @@ describe('useAcpInitialMessage', () => {
         backend: 'claude',
         setAiProcessing,
         checkAndUpdateTitle: vi.fn(),
-        addOrUpdateMessage,
+        addOrUpdateMessage: mockAddOrUpdateMessage,
       })
     );
 
     await waitFor(() => {
-      expect(addOrUpdateMessage).toHaveBeenCalledTimes(2);
+      expect(mockAddOrUpdateMessage).toHaveBeenCalledTimes(1);
     });
 
-    expect(addOrUpdateMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        msg_id: 'acp-init-1',
-        type: 'text',
-        position: 'right',
-      }),
-      true
-    );
-    expect(addOrUpdateMessage).toHaveBeenNthCalledWith(
-      2,
+    expect(mockAddOrUpdateMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'acp-init-2',
         msg_id: 'acp-init-3',
