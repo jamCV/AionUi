@@ -41,6 +41,7 @@ vi.mock('@process/utils/initStorage', () => ({
 
 vi.mock('@process/utils', () => ({
   readDirectoryRecursive: vi.fn(),
+  shouldSkipWorkspaceEntry: (entryName: string) => entryName === '.git' || entryName === 'node_modules',
 }));
 
 vi.mock('@/common', () => ({
@@ -142,10 +143,10 @@ describe('fsBridge listWorkspaceFiles', () => {
     mockStat.mockResolvedValue({ isDirectory: () => true });
     mockReaddir.mockImplementation(async (dirPath: string) => {
       if (dirPath === workspaceRoot) {
-        return [dirent('README.md', 'file'), dirent('references', 'dir')];
+        return [dirent('.git', 'dir'), dirent('README.md', 'file'), dirent('references', 'dir')];
       }
       if (dirPath === path.join(workspaceRoot, 'references')) {
-        return [dirent('prompt-keywords.md', 'file')];
+        return [dirent('node_modules', 'dir'), dirent('prompt-keywords.md', 'file')];
       }
       return [];
     });

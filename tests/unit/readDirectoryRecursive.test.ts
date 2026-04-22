@@ -184,7 +184,9 @@ describe('readDirectoryRecursive', () => {
     readdirSpy.mockRestore();
   });
 
-  it('skips node_modules directory', async () => {
+  it('skips infrastructure directories such as .git and node_modules', async () => {
+    await fsp.mkdir(path.join(tmpDir, '.git'));
+    await fsp.writeFile(path.join(tmpDir, '.git', 'config'), '');
     await fsp.mkdir(path.join(tmpDir, 'node_modules'));
     await fsp.writeFile(path.join(tmpDir, 'node_modules', 'pkg.js'), '');
     await fsp.writeFile(path.join(tmpDir, 'index.ts'), '');
@@ -194,6 +196,7 @@ describe('readDirectoryRecursive', () => {
 
     const names = result.children.map((c) => c.name);
     expect(names).toContain('index.ts');
+    expect(names).not.toContain('.git');
     expect(names).not.toContain('node_modules');
   });
 });

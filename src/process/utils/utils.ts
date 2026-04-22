@@ -206,7 +206,7 @@ export async function readDirectoryRecursive(
 
   for (const item of items) {
     checkStatus();
-    if (item === 'node_modules') continue;
+    if (shouldSkipWorkspaceEntry(item)) continue;
     const itemPath = path.join(dirPath, item);
     if (fileService && fileService.shouldIgnoreFile(itemPath)) continue;
 
@@ -268,6 +268,10 @@ export async function readDirectoryRecursive(
     return a.name.localeCompare(b.name);
   });
   return result;
+}
+
+export function shouldSkipWorkspaceEntry(entryName: string): boolean {
+  return entryName === '.git' || entryName === 'node_modules';
 }
 
 /**

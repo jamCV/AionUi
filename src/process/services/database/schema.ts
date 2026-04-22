@@ -22,20 +22,14 @@ function getTableColumns(db: ISqliteDriver, tableName: string): Set<string> {
     }
 
     return new Set(
-      rows
-        .map((row) => row?.name)
-        .filter((name): name is string => typeof name === 'string' && name.length > 0)
+      rows.map((row) => row?.name).filter((name): name is string => typeof name === 'string' && name.length > 0)
     );
   } catch {
     return new Set();
   }
 }
 
-function archiveLegacyTableIfMissingColumns(
-  db: ISqliteDriver,
-  tableName: string,
-  requiredColumns: string[]
-): void {
+function archiveLegacyTableIfMissingColumns(db: ISqliteDriver, tableName: string, requiredColumns: string[]): void {
   const columns = getTableColumns(db, tableName);
   if (columns.size === 0) {
     return;
@@ -177,6 +171,7 @@ export function initSchema(db: ISqliteDriver): void {
     workspace_mode TEXT NOT NULL DEFAULT 'shared',
     lead_agent_id TEXT NOT NULL DEFAULT '',
     agents TEXT NOT NULL DEFAULT '[]',
+    session_mode TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -263,4 +258,4 @@ export function setDatabaseVersion(db: ISqliteDriver, version: number): void {
  * Current database schema version
  * Update this when adding new migrations in migrations.ts
  */
-export const CURRENT_DB_VERSION = 23;
+export const CURRENT_DB_VERSION = 24;

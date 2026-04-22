@@ -10,6 +10,7 @@ export {
   getConfigPath,
   generateHashWithFullName,
   readDirectoryRecursive,
+  shouldSkipWorkspaceEntry,
   copyDirectoryRecursively,
   verifyDirectoryFiles,
   copyFilesToDirectory,

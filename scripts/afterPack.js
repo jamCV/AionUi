@@ -1,4 +1,3 @@
-const { Arch } = require('builder-util');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -14,9 +13,27 @@ const {
  * Rebuilds native modules for cross-architecture builds
  */
 
+const ELECTRON_BUILDER_ARCH_BY_ID = {
+  0: 'ia32',
+  1: 'x64',
+  2: 'armv7l',
+  3: 'arm64',
+  4: 'universal',
+};
+
+function resolveBuilderArch(arch) {
+  if (typeof arch === 'string' && arch.length > 0) {
+    return arch;
+  }
+  if (typeof arch === 'number' && ELECTRON_BUILDER_ARCH_BY_ID[arch]) {
+    return ELECTRON_BUILDER_ARCH_BY_ID[arch];
+  }
+  return process.arch;
+}
+
 module.exports = async function afterPack(context) {
   const { arch, electronPlatformName, appOutDir, packager } = context;
-  const targetArch = normalizeArch(typeof arch === 'string' ? arch : Arch[arch] || process.arch);
+  const targetArch = normalizeArch(resolveBuilderArch(arch));
   const buildArch = normalizeArch(os.arch());
 
   console.log(`\n🔧 afterPack hook started`);

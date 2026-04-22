@@ -67,7 +67,6 @@ vi.mock('../../src/process/bridge/migrationUtils', () => ({
 }));
 
 vi.mock('../../src/agent/gemini', () => ({
-  GeminiAgent: { buildFileServer: vi.fn(() => ({})) },
   GeminiApprovalStore: { createKeysFromConfirmation: vi.fn(() => []) },
 }));
 
@@ -251,17 +250,32 @@ describe('conversationBridge', () => {
   });
 
   describe('getWorkspace — ENOENT handling', () => {
-    it('returns empty array when buildFileServer throws', async () => {
-      const geminiMod = await vi.importMock<typeof import('../../src/agent/gemini')>('../../src/agent/gemini');
-      geminiMod.GeminiAgent.buildFileServer.mockImplementation(() => {
-        throw new Error('ENOENT: no such file or directory');
+    it('reads the workspace tree without applying agent file discovery filters', async () => {
+      const utilsMod = await vi.importMock<typeof import('../../src/process/utils')>('../../src/process/utils');
+      utilsMod.readDirectoryRecursive.mockResolvedValueOnce({
+        name: 'workspace',
+        fullPath: '/repo',
+        relativePath: '',
+        isDir: true,
+        isFile: false,
+        children: [],
       });
 
       const handler = handlers['getWorkspace'];
-      const result = await handler({ workspace: '/missing/path', path: '/missing/path', search: '' });
+      const result = await handler({ workspace: '/repo', path: '/repo', search: '' });
 
-      expect(result).toEqual([]);
-      geminiMod.GeminiAgent.buildFileServer.mockReturnValue({});
+      expect(result).toEqual([
+        {
+          name: 'workspace',
+          fullPath: '/repo',
+          relativePath: '',
+          isDir: true,
+          isFile: false,
+          children: [],
+        },
+      ]);
+      const [, options] = utilsMod.readDirectoryRecursive.mock.calls.at(-1) ?? [];
+      expect(options?.fileService).toBeUndefined();
     });
 
     it('returns empty array when readDirectoryRecursive rejects with ENOENT', async () => {

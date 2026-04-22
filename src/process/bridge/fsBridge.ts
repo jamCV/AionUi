@@ -14,7 +14,7 @@ import http from 'node:http';
 import JSZip from 'jszip';
 import { ipcBridge } from '@/common';
 import { getSystemDir, getAssistantsDir, getSkillsDir, getBuiltinSkillsCopyDir } from '@process/utils/initStorage';
-import { readDirectoryRecursive } from '@process/utils';
+import { readDirectoryRecursive, shouldSkipWorkspaceEntry } from '@process/utils';
 import type { IWorkspaceFlatFile } from '@/common/adapter/ipcBridge';
 
 // ============================================================================
@@ -222,7 +222,7 @@ async function listWorkspaceFilesRecursive(root: string): Promise<IWorkspaceFlat
         break;
       }
 
-      if (entry.name === 'node_modules') {
+      if (shouldSkipWorkspaceEntry(entry.name)) {
         continue;
       }
 
