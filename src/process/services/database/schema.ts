@@ -197,6 +197,7 @@ export function initSchema(db: ISqliteDriver): void {
     type TEXT NOT NULL DEFAULT 'message',
     content TEXT NOT NULL,
     summary TEXT,
+    files TEXT,
     read INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
@@ -230,6 +231,23 @@ export function initSchema(db: ISqliteDriver): void {
   )`);
   db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_team ON team_tasks(team_id, status)');
 
+  db.exec(`CREATE TABLE IF NOT EXISTS acp_session (
+    conversation_id TEXT PRIMARY KEY,
+    agent_backend TEXT NOT NULL,
+    agent_source TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT,
+    session_status TEXT NOT NULL DEFAULT 'idle',
+    session_config TEXT NOT NULL DEFAULT '{}',
+    last_active_at INTEGER,
+    suspended_at INTEGER
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_acp_session_status ON acp_session(session_status)');
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_acp_session_suspended ON acp_session(session_status, suspended_at) WHERE session_status = 'suspended'"
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_acp_session_agent_id ON acp_session(agent_id)');
+
   console.log('[Database] Schema initialized successfully');
 }
 
@@ -258,4 +276,4 @@ export function setDatabaseVersion(db: ISqliteDriver, version: number): void {
  * Current database schema version
  * Update this when adding new migrations in migrations.ts
  */
-export const CURRENT_DB_VERSION = 24;
+export const CURRENT_DB_VERSION = 27;

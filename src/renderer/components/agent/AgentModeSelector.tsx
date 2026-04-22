@@ -5,15 +5,30 @@
  */
 
 import { ipcBridge } from '@/common';
+import { ConfigStorage } from '@/common/config/storage';
+import type { AcpSessionConfigOption } from '@/common/types/acpTypes';
 import { getAgentModes, supportsModeSwitch, type AgentModeOption } from '@/renderer/utils/model/agentModes';
 import { useLayoutContext } from '@/renderer/hooks/context/LayoutContext';
-import { iconColors } from '@/renderer/styles/colors';
-import { getAgentLogo } from '@/renderer/utils/model/agentLogo';
+import { AgentLogoIcon } from './AgentBadge';
 import { Button, Dropdown, Menu, Message } from '@arco-design/web-react';
-import { Down, Robot } from '@icon-park/react';
-import React, { useCallback, useEffect, useState } from 'react';
+import { Down } from '@icon-park/react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import MarqueePillLabel from './MarqueePillLabel';
+
+/**
+ * Extract mode options from cached ACP configOptions.
+ * Looks for a select-type option with category === 'mode' and converts
+ * its choices to AgentModeOption[] format.
+ */
+function extractModesFromConfigOptions(configOptions: AcpSessionConfigOption[]): AgentModeOption[] {
+  const modeOption = configOptions.find((opt) => opt.category === 'mode' && opt.type === 'select' && opt.options);
+  if (!modeOption?.options || modeOption.options.length === 0) return [];
+  return modeOption.options.map((opt) => ({
+    value: opt.value,
+    label: opt.name || opt.label || opt.value,
+  }));
+}
 
 export interface AgentModeSelectorProps {
   /** Agent backend type / 代理后端类型 */
@@ -48,6 +63,8 @@ export interface AgentModeSelectorProps {
   hideCompactLabelPrefixOnMobile?: boolean;
   /** Callback fired after a successful mode change (for team-mode propagation) */
   onModeChanged?: (mode: string) => void;
+  /** Dynamic modes from capabilities (overrides static list when non-empty) */
+  dynamicModes?: AgentModeOption[];
 }
 
 /**
@@ -74,11 +91,58 @@ const AgentModeSelector: React.FC<AgentModeSelectorProps> = ({
   compactLabelPrefix,
   hideCompactLabelPrefixOnMobile = false,
   onModeChanged,
+  dynamicModes,
 }) => {
   const { t } = useTranslation();
   const layout = useLayoutContext();
   const isMobile = Boolean(layout?.isMobile);
-  const modes = getAgentModes(backend);
+  const [cachedModes, setCachedModes] = useState<AgentModeOption[]>([]);
+
+  // Load modes from cache: try top-level `acp.cachedModes` first (qoder, opencode),
+  // then fall back to `acp.cachedConfigOptions` category=mode (codex)
+  useEffect(() => {
+    if (!backend) return;
+    let cancelled = false;
+
+    // Try top-level modes cache first
+    ConfigStorage.get('acp.cachedModes')
+      .then((cachedModes) => {
+        if (cancelled) return;
+        const sessionModes = cachedModes?.[backend];
+        if (sessionModes?.availableModes && sessionModes.availableModes.length > 0) {
+          setCachedModes(
+            sessionModes.availableModes.map((m) => ({
+              value: m.id,
+              label: m.name ?? m.id,
+            }))
+          );
+          return;
+        }
+        // Fall back to configOptions with category === 'mode'
+        return ConfigStorage.get('acp.cachedConfigOptions').then((cached) => {
+          if (cancelled) return;
+          const options = cached?.[backend];
+          if (Array.isArray(options)) {
+            const modes = extractModesFromConfigOptions(options as AcpSessionConfigOption[]);
+            if (modes.length > 0) {
+              setCachedModes(modes);
+            }
+          }
+        });
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
+
+  // Priority: dynamicModes (runtime) > cachedModes (from cache) > getAgentModes (static fallback)
+  const modes = useMemo(() => {
+    if (dynamicModes && dynamicModes.length > 0) return dynamicModes;
+    if (cachedModes.length > 0) return cachedModes;
+    return getAgentModes(backend);
+  }, [dynamicModes, cachedModes, backend]);
   const defaultMode = modes[0]?.value ?? 'default';
   // Validate initialMode against available modes; fall back to backend's default
   // when the provided value doesn't match (e.g. opencode has 'build'/'plan', not 'default')
@@ -91,7 +155,7 @@ const AgentModeSelector: React.FC<AgentModeSelectorProps> = ({
     [modeLabelFormatter]
   );
 
-  const canSwitchMode = supportsModeSwitch(backend) && (conversationId || onModeSelect);
+  const canSwitchMode = (supportsModeSwitch(backend) || modes.length > 0) && (conversationId || onModeSelect);
   // Mobile conversation header agent pill is display-only by design.
   const canInteract = canSwitchMode && !(compact && compactLabelType === 'agent');
 
@@ -174,28 +238,9 @@ const AgentModeSelector: React.FC<AgentModeSelectorProps> = ({
     [conversationId, currentMode, onModeSelect]
   );
 
-  // Render logo based on source
-  const renderLogo = () => {
-    const logoContent = (() => {
-      if (agentLogo) {
-        if (agentLogoIsEmoji) {
-          return <span className='text-14px leading-none'>{agentLogo}</span>;
-        }
-        return (
-          <img src={agentLogo} alt={`${agentName || 'agent'} logo`} className='block w-16px h-16px object-contain' />
-        );
-      }
-      const logo = getAgentLogo(backend);
-      if (logo) {
-        return <img src={logo} alt={`${backend} logo`} className='block w-16px h-16px object-contain' />;
-      }
-      return <Robot theme='outline' size={16} fill={iconColors.primary} />;
-    })();
-
-    return (
-      <span className='inline-flex w-16px h-16px items-center justify-center shrink-0 leading-none'>{logoContent}</span>
-    );
-  };
+  const renderLogo = () => (
+    <AgentLogoIcon backend={backend} agentName={agentName} agentLogo={agentLogo} agentLogoIsEmoji={agentLogoIsEmoji} />
+  );
 
   // Get display label for current mode
   const getCurrentModeLabel = () => {
@@ -209,7 +254,7 @@ const AgentModeSelector: React.FC<AgentModeSelectorProps> = ({
       <Menu.ItemGroup title={t('agentMode.switchMode', { defaultValue: 'Switch Mode' })}>
         {modes.map((mode: AgentModeOption) => (
           <Menu.Item key={mode.value} className={currentMode === mode.value ? '!bg-2' : ''}>
-            <div className='flex items-center gap-8px'>
+            <div className='flex items-center gap-8px' data-mode-value={mode.value}>
               {currentMode === mode.value && <span className='text-primary'>✓</span>}
               <span className={currentMode !== mode.value ? 'ml-16px' : ''}>{getDisplayModeLabel(mode)}</span>
             </div>
@@ -240,24 +285,26 @@ const AgentModeSelector: React.FC<AgentModeSelectorProps> = ({
     }
 
     const compactContent = (
-      <Button
-        className={`sendbox-model-btn agent-mode-compact-pill ${canInteract ? '' : 'agent-mode-compact-pill--readonly'}`}
-        shape='round'
-        size='small'
-        onClick={canInteract ? () => !isLoading && setDropdownVisible((visible) => !visible) : undefined}
-        style={{
-          opacity: isLoading ? 0.6 : 1,
-          transition: 'opacity 0.2s',
-          cursor: canInteract ? 'pointer' : 'default',
-        }}
-      >
-        <span className='flex items-center gap-6px min-w-0 leading-none'>
-          {compactLeadingIcon && <span className='shrink-0 inline-flex items-center'>{compactLeadingIcon}</span>}
-          {showLogoInCompact && <span className='shrink-0 inline-flex items-center'>{renderLogo()}</span>}
-          <MarqueePillLabel>{compactLabel}</MarqueePillLabel>
-          {canInteract && <Down size={12} className='text-t-tertiary shrink-0' />}
-        </span>
-      </Button>
+      <span data-testid='mode-selector' data-current-mode={currentMode} className='inline-flex'>
+        <Button
+          className={`sendbox-model-btn agent-mode-compact-pill ${canInteract ? '' : 'agent-mode-compact-pill--readonly'}`}
+          shape='round'
+          size='small'
+          onClick={canInteract ? () => !isLoading && setDropdownVisible((visible) => !visible) : undefined}
+          style={{
+            opacity: isLoading ? 0.6 : 1,
+            transition: 'opacity 0.2s',
+            cursor: canInteract ? 'pointer' : 'default',
+          }}
+        >
+          <span className='flex items-center gap-6px min-w-0 leading-none'>
+            {compactLeadingIcon && <span className='shrink-0 inline-flex items-center'>{compactLeadingIcon}</span>}
+            {showLogoInCompact && <span className='shrink-0 inline-flex items-center'>{renderLogo()}</span>}
+            <MarqueePillLabel>{compactLabel}</MarqueePillLabel>
+            {canInteract && <Down size={12} className='text-t-tertiary shrink-0' />}
+          </span>
+        </Button>
+      </span>
     );
 
     if (!canInteract) {

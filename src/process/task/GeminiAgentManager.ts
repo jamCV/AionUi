@@ -24,7 +24,7 @@ import { addMessage, addOrUpdateMessage, nextTickToLocalFinish } from '@process/
 import { cronBusyGuard } from '@process/services/cron/CronBusyGuard';
 import { skillSuggestWatcher } from '@process/services/cron/SkillSuggestWatcher';
 import { handlePreviewOpenEvent } from '@process/utils/previewUtils';
-import { getAionMcpStdioConfig } from '@process/services/mcpServices/aionMcpServiceSingleton';
+import { getTeamGuideStdioConfig } from '@process/team/mcp/guide/teamGuideSingleton';
 import BaseAgentManager from './BaseAgentManager';
 import { IpcAgentEventEmitter } from './IpcAgentEventEmitter';
 import { mainLog, mainWarn, mainError } from '@process/utils/mainLogger';
@@ -72,6 +72,7 @@ export class GeminiAgentManager extends BaseAgentManager<
   contextContent?: string;
   enabledSkills?: string[];
   excludeBuiltinSkills?: string[];
+  presetAssistantId?: string;
   private bootstrap: Promise<void>;
 
   /** Fingerprint of MCP config used by the current worker, for change detection */
@@ -156,6 +157,8 @@ export class GeminiAgentManager extends BaseAgentManager<
       };
       /** Builtin skill names to exclude from discovery (e.g. 'cron' for cron-spawned conversations) */
       excludeBuiltinSkills?: string[];
+      /** Preset assistant id backing this conversation — used to label Leader in team guide prompt */
+      presetAssistantId?: string;
     },
     model: TProviderWithModel
   ) {
@@ -167,6 +170,7 @@ export class GeminiAgentManager extends BaseAgentManager<
     this.presetRules = data.presetRules;
     this.enabledSkills = data.enabledSkills;
     this.excludeBuiltinSkills = data.excludeBuiltinSkills;
+    this.presetAssistantId = data.presetAssistantId;
     this.forceYoloMode = data.yoloMode;
     this.currentMode = data.sessionMode || 'default';
     this.webSearchEngine = data.webSearchEngine;
@@ -242,8 +246,12 @@ export class GeminiAgentManager extends BaseAgentManager<
         // so it goes into GEMINI.md and the agent knows when to stay solo vs discuss Team mode.
         let effectivePresetRules = this.presetRules;
         if (!this.teamMcpStdioConfig) {
-          const { getTeamGuidePrompt } = await import('@process/resources/prompts/teamGuidePrompt');
-          const teamGuide = getTeamGuidePrompt('gemini');
+          const [{ getTeamGuidePrompt }, { resolveLeaderAssistantLabel }] = await Promise.all([
+            import('@process/team/prompts/teamGuidePrompt.ts'),
+            import('@process/team/prompts/teamGuideAssistant.ts'),
+          ]);
+          const leaderLabel = await resolveLeaderAssistantLabel(this.presetAssistantId);
+          const teamGuide = getTeamGuidePrompt({ backend: 'gemini', leaderLabel });
           effectivePresetRules = effectivePresetRules ? `${effectivePresetRules}\n\n${teamGuide}` : teamGuide;
         }
 
@@ -326,7 +334,12 @@ export class GeminiAgentManager extends BaseAgentManager<
         console.warn('[GeminiAgentManager] Failed to load extension MCP servers:', extError);
       }
 
-      if (allServers.length === 0 && !this.teamMcpStdioConfig?.command) {
+      // Only skip when we have NOTHING to inject: no user MCP, no team MCP, and no
+      // aion team-guide MCP. Previously this shortcut fired whenever the user had
+      // no custom MCP and wasn't in a team, which silently dropped the aion_* tools
+      // (aion_create_team / aion_list_models) for every plain preset-assistant chat.
+      const hasAionGuide = !this.teamMcpStdioConfig?.command && Boolean(getTeamGuideStdioConfig()?.command);
+      if (allServers.length === 0 && !this.teamMcpStdioConfig?.command && !hasAionGuide) {
         this.mcpFingerprint = '[]';
         return {};
       }
@@ -380,16 +393,17 @@ export class GeminiAgentManager extends BaseAgentManager<
         mainLog('[GeminiAgentManager]', 'getMcpServers: no teamMcpStdioConfig, skipping team MCP injection');
 
         // Inject Aion team-guide MCP server for solo agents (not in team mode)
-        // so Gemini can call aion_create_team / aion_navigate after the user requests a Team
+        // so Gemini can call aion_create_team after the user requests a Team
         // or explicitly approves Team for an exceptionally hard task.
         // AION_MCP_BACKEND tells the stdio bridge this is a gemini agent.
-        const aionStdioConfig = getAionMcpStdioConfig();
+        const aionStdioConfig = getTeamGuideStdioConfig();
         if (aionStdioConfig) {
           const aionEnvObj: Record<string, string> = {};
           for (const { name, value } of aionStdioConfig.env || []) {
             aionEnvObj[name] = value;
           }
           aionEnvObj['AION_MCP_BACKEND'] = 'gemini';
+          aionEnvObj['AION_MCP_CONVERSATION_ID'] = this.conversation_id;
           mcpConfig[aionStdioConfig.name] = {
             command: aionStdioConfig.command,
             args: aionStdioConfig.args || [],
@@ -650,12 +664,12 @@ export class GeminiAgentManager extends BaseAgentManager<
    */
   private tryAutoApprove(content: IMessageToolGroup['content'][number]): boolean {
     const type = content.confirmationDetails?.type;
-    console.log(
+    console.debug(
       `[GeminiAgentManager] tryAutoApprove: currentMode=${this.currentMode}, confirmationType=${type}, callId=${content.callId}`
     );
     if (this.currentMode === 'yolo') {
       // yolo: auto-approve ALL operations
-      console.log(`[GeminiAgentManager] YOLO auto-approving ${type}: callId=${content.callId}`);
+      console.debug(`[GeminiAgentManager] YOLO auto-approving ${type}: callId=${content.callId}`);
       void this.postMessagePromise(content.callId, ToolConfirmationOutcome.ProceedOnce);
       return true;
     }
@@ -735,6 +749,21 @@ export class GeminiAgentManager extends BaseAgentManager<
 
   init() {
     super.init();
+    this.on('exit', (data: { code: number | null; signal: NodeJS.Signals | null }) => {
+      const crashMessage = {
+        conversation_id: this.conversation_id,
+        msg_id: uuid(),
+        type: 'finish',
+        data: {
+          error: `Process exited unexpectedly (code: ${data.code === null ? 'null' : data.code}, signal: ${data.signal ?? 'null'})`,
+          agentCrash: true,
+        },
+      } satisfies IResponseMessage;
+
+      ipcBridge.geminiConversation.responseStream.emit(crashMessage);
+      teamEventBus.emit('responseStream', crashMessage);
+    });
+
     // 接受来子进程的对话消息
     this.on('gemini.message', (data) => {
       // Mark as finished when content is output (visible to user)

@@ -903,9 +903,40 @@ const initStorage = async () => {
     await initBuiltinAssistantRules();
     mark('5.1 initBuiltinAssistantRules');
 
-    // 5.2 初始化助手配置（只包含元数据，不包含 context）
+    // 5.2 Split storage semantics (one-time migration):
+    //   - `assistants`        → built-in / preset assistants (isPreset === true)
+    //   - `acp.customAgents`  → user-defined custom ACP agents (isPreset !== true)
+    //
+    // Historical context: v1.9.18 moved every entry from `acp.customAgents` into
+    // `assistants`, conflating the two concepts. This migration splits them back.
+    const ASSISTANTS_SPLIT_MIGRATION_KEY = 'migration.assistantsSplitCustom';
+    const splitMigrationDone = await configFile.get(ASSISTANTS_SPLIT_MIGRATION_KEY).catch(() => false);
+    if (!splitMigrationDone) {
+      const legacyCustomAgents =
+        ((await configFile.get('acp.customAgents').catch((): undefined => undefined)) as
+          | AcpBackendConfig[]
+          | undefined) || [];
+      const currentAssistants =
+        ((await configFile.get('assistants').catch((): undefined => undefined)) as AcpBackendConfig[] | undefined) ||
+        [];
+
+      const presetsInAssistants = currentAssistants.filter((a) => a.isPreset === true);
+      const customsInAssistants = currentAssistants.filter((a) => a.isPreset !== true);
+
+      // Merge customs, dedupe by id (existing acp.customAgents takes priority).
+      const existingCustomIds = new Set(legacyCustomAgents.map((a) => a.id));
+      const mergedCustoms = [...legacyCustomAgents, ...customsInAssistants.filter((a) => !existingCustomIds.has(a.id))];
+
+      if (mergedCustoms.length > 0) {
+        await configFile.set('acp.customAgents', mergedCustoms);
+      }
+      await configFile.set('assistants', presetsInAssistants);
+      await configFile.set(ASSISTANTS_SPLIT_MIGRATION_KEY, true);
+    }
+
+    // 5.3 初始化助手配置（只包含元数据，不包含 context）
     // Initialize assistant config (metadata only, no context)
-    const existingAgents = (await configFile.get('acp.customAgents').catch((): undefined => undefined)) || [];
+    const existingAgents = (await configFile.get('assistants').catch((): undefined => undefined)) || [];
     const builtinAssistants = getBuiltinAssistants();
 
     // 5.2.1 检查是否需要迁移：修复老版本中所有助手都默认启用的问题
@@ -1018,7 +1049,7 @@ const initStorage = async () => {
     }
 
     if (hasChanges) {
-      await configFile.set('acp.customAgents', updatedAgents);
+      await configFile.set('assistants', updatedAgents);
     }
 
     // 标记迁移完成 / Mark migration as done

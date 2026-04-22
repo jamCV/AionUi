@@ -311,5 +311,8 @@
       "unsupported": "Some files cannot be reverted safely, but this turn can still be kept.",
       "failed": "Revert failed. Please inspect the workspace manually."
     }
+  },
+  "skills": {
+    "loaded": "로드된 스킬"
   }
 }

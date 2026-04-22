@@ -36,7 +36,21 @@ type AssistantLike = {
  * - customAgentId: ACP 会话的旧格式
  * - enabledSkills: Gemini Cowork 会话的旧格式
  */
-function resolvePresetId(conversation: TChatConversation): string | null {
+/**
+ * Resolve the assistant config ID (preserving original prefix like 'builtin-').
+ * Use this when matching against the assistant list in ConfigStorage 'assistants'.
+ */
+export function resolveAssistantConfigId(conversation: TChatConversation): string | null {
+  const extra = conversation.extra as {
+    presetAssistantId?: unknown;
+    customAgentId?: unknown;
+  };
+  const presetAssistantId = typeof extra?.presetAssistantId === 'string' ? extra.presetAssistantId.trim() : '';
+  const customAgentId = typeof extra?.customAgentId === 'string' ? extra.customAgentId.trim() : '';
+  return presetAssistantId || customAgentId || null;
+}
+
+export function resolvePresetId(conversation: TChatConversation): string | null {
   const extra = conversation.extra as {
     presetAssistantId?: unknown;
     customAgentId?: unknown;
@@ -282,10 +296,22 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
 } {
   const { i18n } = useTranslation();
 
-  // Fetch custom agents to support custom preset assistants
-  const { data: customAgents, isLoading: isLoadingCustomAgents } = useSWR('acp.customAgents', () =>
+  // Fetch both preset assistants and user-defined custom ACP agents.
+  // `presetId` may reference either, so we merge both sources before lookup.
+  const { data: assistantsList, isLoading: isLoadingAssistants } = useSWR('assistants', () =>
+    ConfigStorage.get('assistants')
+  );
+  const { data: userCustomAgentsList, isLoading: isLoadingUserCustomAgents } = useSWR('acp.customAgents', () =>
     ConfigStorage.get('acp.customAgents')
   );
+  const customAgents = useMemo(
+    () => [
+      ...((assistantsList as AssistantLike[] | undefined) ?? []),
+      ...((userCustomAgentsList as AssistantLike[] | undefined) ?? []),
+    ],
+    [assistantsList, userCustomAgentsList]
+  );
+  const isLoadingCustomAgents = isLoadingAssistants || isLoadingUserCustomAgents;
 
   // Fetch extension-contributed assistants
   const { data: extensionAssistants, isLoading: isLoadingExtAssistants } = useSWR('extensions.assistants', () =>
@@ -328,7 +354,7 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
       const inferredInfo = inferLegacyAssistantInfo(
         conversation,
         locale,
-        customAgents as AssistantLike[] | undefined,
+        customAgents,
         extensionAssistants as AssistantLike[] | undefined
       );
       if (inferredInfo) {
@@ -398,6 +424,8 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
     conversation,
     i18n.language,
     customAgents,
+    isLoadingAssistants,
+    isLoadingUserCustomAgents,
     isLoadingCustomAgents,
     extensionAssistants,
     isLoadingExtAssistants,

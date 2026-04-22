@@ -6,7 +6,60 @@ vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => '/app' },
 }));
 
-import { TeamMcpServer } from '@process/team/TeamMcpServer';
+// Mock ProcessConfig for dynamic team capability checks
+const mockAssistants = vi.hoisted(() => ({
+  value: null as Array<Record<string, unknown>> | null,
+}));
+vi.mock('@process/utils/initStorage', () => ({
+  ProcessConfig: {
+    get: vi.fn(async (key: string) => {
+      if (key === 'acp.cachedInitializeResult') {
+        return {
+          claude: {
+            protocolVersion: 1,
+            capabilities: {
+              loadSession: false,
+              promptCapabilities: { image: false, audio: false, embeddedContext: false },
+              mcpCapabilities: { stdio: true, http: false, sse: false },
+              sessionCapabilities: { fork: null, resume: null, list: null, close: null },
+              _meta: {},
+            },
+            agentInfo: null,
+            authMethods: [],
+          },
+          codex: {
+            protocolVersion: 1,
+            capabilities: {
+              loadSession: false,
+              promptCapabilities: { image: false, audio: false, embeddedContext: false },
+              mcpCapabilities: { stdio: true, http: false, sse: false },
+              sessionCapabilities: { fork: null, resume: null, list: null, close: null },
+              _meta: {},
+            },
+            agentInfo: null,
+            authMethods: [],
+          },
+        };
+      }
+      if (key === 'assistants') {
+        return mockAssistants.value;
+      }
+      return null;
+    }),
+  },
+}));
+
+// Mock acpDetector for getTeamCapableBackends error message
+vi.mock('@process/agent/acp/AcpDetector', () => ({
+  acpDetector: {
+    getDetectedAgents: vi.fn(() => [
+      { backend: 'claude', name: 'Claude' },
+      { backend: 'codex', name: 'Codex' },
+    ]),
+  },
+}));
+
+import { TeamMcpServer } from '@process/team/mcp/team/TeamMcpServer';
 import type { Mailbox } from '@process/team/Mailbox';
 import type { TaskManager } from '@process/team/TaskManager';
 import type { TeamAgent } from '@process/team/types';
@@ -19,7 +72,7 @@ function makeAgent(overrides: Partial<TeamAgent> = {}): TeamAgent {
   return {
     slotId: 'slot-1',
     conversationId: 'conv-1',
-    role: 'lead',
+    role: 'leader',
     agentType: 'acp',
     agentName: 'Claude',
     conversationType: 'acp',
@@ -99,8 +152,9 @@ describe('TeamMcpServer', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockAssistants.value = null;
     agents = [
-      makeAgent({ slotId: 'slot-lead', agentName: 'Leader', role: 'lead' }),
+      makeAgent({ slotId: 'slot-lead', agentName: 'Leader', role: 'leader' }),
       makeAgent({ slotId: 'slot-member', agentName: 'Alice', role: 'teammate' }),
     ];
     mailbox = makeMailbox();
@@ -203,7 +257,7 @@ describe('TeamMcpServer', () => {
       })) as Record<string, unknown>;
       expect(response.result).toContain('Leader');
       expect(response.result).toContain('Alice');
-      expect(response.result).toContain('lead');
+      expect(response.result).toContain('leader');
       expect(response.result).toContain('teammate');
     });
 
@@ -373,7 +427,7 @@ describe('TeamMcpServer', () => {
         auth_token: authToken,
       })) as Record<string, unknown>;
 
-      // Should write to Alice (not to sender = lead)
+      // Should write to Alice (not to sender = leader)
       expect(mailbox.write).toHaveBeenCalledWith(
         expect.objectContaining({ toAgentId: 'slot-member', content: 'Everyone hear this' })
       );
@@ -392,7 +446,7 @@ describe('TeamMcpServer', () => {
       expect(response.result).toContain('Shutdown confirmed');
     });
 
-    it('handles shutdown_rejected by notifying lead', async () => {
+    it('handles shutdown_rejected by notifying leader', async () => {
       const response = (await tcpRequest(server.getPort(), {
         tool: 'team_send_message',
         args: { to: 'Leader', message: 'shutdown_rejected: I need to finish my task' },
@@ -415,7 +469,7 @@ describe('TeamMcpServer', () => {
   // -------------------------------------------------------------------------
 
   describe('team_spawn_agent', () => {
-    it('spawns a new agent when called by lead', async () => {
+    it('spawns a new agent when called by leader', async () => {
       const response = (await tcpRequest(server.getPort(), {
         tool: 'team_spawn_agent',
         args: { name: 'NewBot', agent_type: 'claude' },
@@ -423,11 +477,11 @@ describe('TeamMcpServer', () => {
         auth_token: authToken,
       })) as Record<string, unknown>;
 
-      expect(spawnAgent).toHaveBeenCalledWith('NewBot', 'claude');
+      expect(spawnAgent).toHaveBeenCalledWith('NewBot', 'claude', undefined, undefined);
       expect(response.result).toContain('NewBot');
     });
 
-    it('rejects spawn from non-lead agent', async () => {
+    it('rejects spawn from non-leader agent', async () => {
       const response = (await tcpRequest(server.getPort(), {
         tool: 'team_spawn_agent',
         args: { name: 'NewBot', agent_type: 'claude' },
@@ -435,7 +489,7 @@ describe('TeamMcpServer', () => {
         auth_token: authToken,
       })) as Record<string, unknown>;
 
-      expect(response.error).toContain('Only the team lead');
+      expect(response.error).toContain('Only the team leader');
       expect(spawnAgent).not.toHaveBeenCalled();
     });
 
@@ -448,6 +502,64 @@ describe('TeamMcpServer', () => {
       })) as Record<string, unknown>;
 
       expect(response.error).toContain('not supported in team mode');
+    });
+
+    it('spawns a preset teammate using custom_agent_id and derives backend from the preset', async () => {
+      mockAssistants.value = [
+        {
+          id: 'builtin-word-creator',
+          name: 'Word Creator',
+          isPreset: true,
+          enabled: true,
+          presetAgentType: 'claude',
+        },
+      ];
+
+      const response = (await tcpRequest(server.getPort(), {
+        tool: 'team_spawn_agent',
+        args: { name: 'WordBot', custom_agent_id: 'builtin-word-creator' },
+        from_slot_id: 'slot-lead',
+        auth_token: authToken,
+      })) as Record<string, unknown>;
+
+      expect(response.error).toBeUndefined();
+      expect(spawnAgent).toHaveBeenCalledWith('WordBot', 'claude', undefined, 'builtin-word-creator');
+    });
+
+    it('rejects spawn when custom_agent_id does not match any preset', async () => {
+      mockAssistants.value = [];
+
+      const response = (await tcpRequest(server.getPort(), {
+        tool: 'team_spawn_agent',
+        args: { name: 'GhostBot', custom_agent_id: 'builtin-missing' },
+        from_slot_id: 'slot-lead',
+        auth_token: authToken,
+      })) as Record<string, unknown>;
+
+      expect(response.error).toContain('Preset assistant "builtin-missing" not found');
+      expect(spawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('rejects spawn when custom_agent_id is disabled', async () => {
+      mockAssistants.value = [
+        {
+          id: 'builtin-cowork',
+          name: 'Cowork',
+          isPreset: true,
+          enabled: false,
+          presetAgentType: 'claude',
+        },
+      ];
+
+      const response = (await tcpRequest(server.getPort(), {
+        tool: 'team_spawn_agent',
+        args: { name: 'CoworkBot', custom_agent_id: 'builtin-cowork' },
+        from_slot_id: 'slot-lead',
+        auth_token: authToken,
+      })) as Record<string, unknown>;
+
+      expect(response.error).toContain('disabled');
+      expect(spawnAgent).not.toHaveBeenCalled();
     });
   });
 
@@ -474,7 +586,7 @@ describe('TeamMcpServer', () => {
       expect(response.result).toContain('Alice');
     });
 
-    it('rejects shutdown of the lead', async () => {
+    it('rejects shutdown of the leader', async () => {
       const response = (await tcpRequest(server.getPort(), {
         tool: 'team_shutdown_agent',
         args: { agent: 'Leader' },
@@ -482,7 +594,7 @@ describe('TeamMcpServer', () => {
         auth_token: authToken,
       })) as Record<string, unknown>;
 
-      expect(response.error).toContain('Cannot shut down the team lead');
+      expect(response.error).toContain('Cannot shut down the team leader');
     });
 
     it('returns error when agent not found', async () => {

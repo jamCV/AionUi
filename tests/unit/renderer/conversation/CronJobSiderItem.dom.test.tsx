@@ -59,8 +59,8 @@ vi.mock('@icon-park/react', () => ({
   MessageOne: () => <span data-testid='icon-message' />,
 }));
 
-vi.mock('@arco-design/web-react', () => {
-  const ModalComponent = ({
+const ModalComponent = vi.hoisted(() => {
+  const Comp = ({
     visible,
     children,
     onOk,
@@ -86,8 +86,7 @@ vi.mock('@arco-design/web-react', () => {
     );
   };
 
-  ModalComponent.confirm = ({ onOk }: { onOk?: () => void | Promise<void> }) => {
-    // Simulate confirmation by immediately calling onOk
+  Comp.confirm = ({ onOk }: { onOk?: () => void | Promise<void> }) => {
     if (onOk) {
       const result = onOk();
       if (result instanceof Promise) {
@@ -96,6 +95,10 @@ vi.mock('@arco-design/web-react', () => {
     }
   };
 
+  return Comp;
+});
+
+vi.mock('@arco-design/web-react', () => {
   return {
     Modal: ModalComponent,
     Input: ({
@@ -154,6 +157,12 @@ vi.mock('@/renderer/utils/ui/siderTooltip', () => ({
   cleanupSiderTooltips: vi.fn(),
 }));
 
+vi.mock('@/renderer/components/layout/Sider/SortableSiderEntry', () => ({
+  default: ({ children, testId }: { children: React.ReactNode; testId?: string }) => (
+    <div data-testid={testId}>{children}</div>
+  ),
+}));
+
 // Mock ConversationRow component
 vi.mock('@renderer/pages/conversation/GroupedHistory/ConversationRow', () => ({
   default: ({
@@ -203,7 +212,7 @@ vi.mock('@renderer/hooks/context/ConversationHistoryContext', () => ({
 
 import type { ICronJob } from '@/common/adapter/ipcBridge';
 import type { TChatConversation } from '@/common/config/storage';
-import CronJobSiderItem from '@/renderer/components/layout/Sider/CronJobSiderItem';
+import CronJobSiderItem from '@/renderer/components/layout/Sider/CronJobSiderSection/CronJobSiderItem';
 
 describe('CronJobSiderItem', () => {
   const mockOnNavigate = vi.fn();
@@ -267,6 +276,7 @@ describe('CronJobSiderItem', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mockConversationListByCronJob.mockResolvedValue(mockConversations);
     mockConversationGet.mockResolvedValue(mockConversations[0]);
     mockConversationUpdate.mockResolvedValue(true);
@@ -413,6 +423,24 @@ describe('CronJobSiderItem', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('conversation-row-existing-conv')).toBeInTheDocument();
+    });
+  });
+
+  it('uses the stored order for child conversations inside the cron section', async () => {
+    localStorage.setItem('cron-job-conversation-order-job-1', JSON.stringify(['conv-2', 'conv-1']));
+
+    render(<CronJobSiderItem job={mockJobNewConversation} pathname='/' onNavigate={mockOnNavigate} />);
+
+    await waitFor(() => {
+      const arrow = screen.getByTestId('icon-down');
+      fireEvent.click(arrow);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('conversation-name').map((element) => element.textContent)).toEqual([
+        'Conversation 2',
+        'Conversation 1',
+      ]);
     });
   });
 

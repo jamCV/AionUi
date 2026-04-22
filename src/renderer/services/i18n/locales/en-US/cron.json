@@ -61,7 +61,7 @@
     "createSuccess": "Task created successfully",
     "updateSuccess": "Task updated successfully",
     "scheduleHint": "Scheduled tasks use a randomized delay of several minutes for server performance.",
-    "customCronWarning": "This is a custom cron expression ({{expr}}) that cannot be edited through the UI. Switch to a preset frequency to change the schedule.",
+    "customCronWarning": "This task has a custom schedule that can't be edited here. Changing the frequency will replace it.",
     "weekday": {
       "monday": "Monday",
       "tuesday": "Tuesday",
@@ -112,7 +112,7 @@
       "daily": "Daily",
       "weekdays": "Weekdays",
       "weekly": "Weekly",
-      "custom": "Custom cron..."
+      "custom": "Custom"
     },
     "scheduleDesc": {
       "manual": "Manual",
@@ -134,7 +134,7 @@
     "saveFailed": "Failed to save skill"
   },
   "error": {
-    "alreadyExists": "This conversation already has a scheduled task \"{{name}}\" (ID: {{id}}). Please delete it first before creating a new one, or use [CRON_LIST] to view existing tasks.",
+    "alreadyExists": "This conversation already has a scheduled task \"{{name}}\" (ID: {{id}}). Please update the existing task instead of creating a new one.",
     "missedJob": "⏰ Scheduled task \"{{name}}\" was not executed during system sleep.\nScheduled time: {{time}}\nThe timer has been restarted and will run at the next scheduled time.",
     "jobNotFound": "Task not found: {{id}}",
     "conversationNotFound": "Conversation not found",

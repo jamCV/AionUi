@@ -34,7 +34,6 @@ export interface AgentModeOption {
  * - Qwen: ACP session/set_mode returns success but does not enforce plan mode behavior.
  *   Plan mode disabled until upstream fix. See https://github.com/QwenLM/qwen-code/issues/1806
  * - OpenCode: plan/build modes via ACP session/set_mode (no yolo support)
- * - iFlow: smart/yolo/default/plan modes via ACP session/set_mode (verified)
  * - Gemini: supports default/autoEdit/yolo (auto-approve at manager layer, not via ACP)
  * - Codex: default modes stay sandboxed; a dedicated unsafe full-auto mode disables the sandbox
  * - Goose: mode set at startup only, not during session
@@ -58,12 +57,6 @@ export const AGENT_MODES: Record<string, AgentModeOption[]> = {
     { value: 'build', label: 'Build' },
     { value: 'plan', label: 'Plan' },
   ],
-  iflow: [
-    { value: 'default', label: 'Default' },
-    { value: 'smart', label: 'Smart' },
-    { value: 'plan', label: 'Plan' },
-    { value: 'yolo', label: 'YOLO' },
-  ],
   gemini: [
     { value: 'default', label: 'Default' },
     { value: 'autoEdit', label: 'Auto-Accept Edits' },
@@ -85,6 +78,10 @@ export const AGENT_MODES: Record<string, AgentModeOption[]> = {
     { value: 'plan', label: 'Plan', description: 'Read-only mode for planning and designing before implementation' },
     { value: 'ask', label: 'Ask', description: 'Q&A mode - no edits or command execution' },
   ],
+  snow: [
+    { value: 'default', label: 'Agent', description: 'Full agent mode with tool access' },
+    { value: 'yolo', label: 'YOLO', description: 'Auto-approve all operations without prompting' },
+  ],
 };
 
 /**
@@ -100,6 +97,39 @@ export function getAgentModes(backend: string | undefined): AgentModeOption[] {
 }
 
 /**
+ * Convert a snake_case mode value to a title-cased label.
+ * e.g. 'auto_edit' -> 'Auto Edit', 'plan' -> 'Plan'
+ */
+function toTitleCase(value: string): string {
+  return value
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
+ * Merge static mode definitions with dynamic capabilities from the agent.
+ * - If capabilityModes is null/empty, return static modes (fallback).
+ * - Otherwise, return only modes reported by capabilities, preserving
+ *   static labels when available and title-casing unknown modes.
+ *
+ * @param backend - Agent backend type
+ * @param capabilityModes - Dynamic modes from capabilities.modes (null = not available)
+ */
+export function mergeWithCapabilities(
+  backend: string | undefined,
+  capabilityModes: string[] | null
+): AgentModeOption[] {
+  const staticModes = getAgentModes(backend);
+  if (!capabilityModes || capabilityModes.length === 0) {
+    return staticModes;
+  }
+
+  const staticMap = new Map(staticModes.map((m) => [m.value, m]));
+  return capabilityModes.map((value) => staticMap.get(value) ?? { value, label: toTitleCase(value) });
+}
+
+/**
  * Check if a backend supports mode switching during session
  *
  * @param backend - Agent backend type
@@ -112,24 +142,6 @@ export function supportsModeSwitch(backend: string | undefined): boolean {
 
 /**
  * Full-auto mode value per backend.
- * Used by cron jobs to run without permission prompts.
+ * Re-exported from common for backward compatibility.
  */
-const FULL_AUTO_MODE: Record<string, string> = {
-  claude: 'bypassPermissions',
-  qwen: 'yolo',
-  opencode: 'build',
-  iflow: 'yolo',
-  gemini: 'yolo',
-  aionrs: 'yolo',
-  codex: CODEX_MODE_FULL_AUTO,
-  cursor: 'agent',
-};
-
-/**
- * Get the full-auto mode value for a given backend.
- * Falls back to 'yolo' for unknown backends.
- */
-export function getFullAutoMode(backend: string | undefined): string {
-  if (!backend) return 'yolo';
-  return FULL_AUTO_MODE[backend] || 'yolo';
-}
+export { getFullAutoMode } from '@/common/types/agentModes';

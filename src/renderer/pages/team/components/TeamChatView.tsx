@@ -4,6 +4,7 @@ import { Spin } from '@arco-design/web-react';
 import React, { Suspense, useCallback } from 'react';
 import { useGeminiModelSelection } from '@/renderer/pages/conversation/platforms/gemini/useGeminiModelSelection';
 import { useAionrsModelSelection } from '@/renderer/pages/conversation/platforms/aionrs/useAionrsModelSelection';
+import TeamChatEmptyState from './TeamChatEmptyState';
 
 const AcpChat = React.lazy(() => import('@/renderer/pages/conversation/platforms/acp/AcpChat'));
 const AionrsChat = React.lazy(() => import('@/renderer/pages/conversation/platforms/aionrs/AionrsChat'));
@@ -21,9 +22,8 @@ const GeminiTeamChat: React.FC<{
   hideSendBox?: boolean;
   teamId?: string;
   agentSlotId?: string;
-  agentName?: string;
-  agentType?: string;
-}> = ({ conversation, hideSendBox, teamId, agentSlotId, agentName, agentType }) => {
+  emptySlot?: React.ReactNode;
+}> = ({ conversation, hideSendBox, teamId, agentSlotId, emptySlot }) => {
   const onSelectModel = useCallback(
     async (_provider: IProvider, modelName: string) => {
       const selected = { ..._provider, useModel: modelName } as TProviderWithModel;
@@ -43,8 +43,7 @@ const GeminiTeamChat: React.FC<{
       hideSendBox={hideSendBox}
       teamId={teamId}
       agentSlotId={agentSlotId}
-      agentName={agentName}
-      agentType={agentType}
+      emptySlot={emptySlot}
     />
   );
 };
@@ -55,7 +54,10 @@ type AionrsConversation = Extract<TChatConversation, { type: 'aionrs' }>;
 /** Aionrs sub-component manages model selection state without adding a ChatLayout wrapper */
 const AionrsTeamChat: React.FC<{
   conversation: AionrsConversation;
-}> = ({ conversation }) => {
+  teamId?: string;
+  agentSlotId?: string;
+  emptySlot?: React.ReactNode;
+}> = ({ conversation, teamId, agentSlotId, emptySlot }) => {
   const onSelectModel = useCallback(
     async (_provider: IProvider, modelName: string) => {
       const selected = { ..._provider, useModel: modelName } as TProviderWithModel;
@@ -72,6 +74,9 @@ const AionrsTeamChat: React.FC<{
       conversation_id={conversation.id}
       workspace={conversation.extra.workspace}
       modelSelection={modelSelection}
+      teamId={teamId}
+      agentSlotId={agentSlotId}
+      emptySlot={emptySlot}
     />
   );
 };
@@ -84,21 +89,17 @@ type TeamChatViewProps = {
   /** When set alongside teamId, routes messages to a specific agent via team.sendMessageToAgent */
   agentSlotId?: string;
   agentName?: string;
-  agentType?: string;
 };
 
 /**
  * Routes to the correct platform chat component based on conversation type.
  * Does NOT wrap in ChatLayout — that is done by the parent TeamPage.
  */
-const TeamChatView: React.FC<TeamChatViewProps> = ({
-  conversation,
-  hideSendBox,
-  teamId,
-  agentSlotId,
-  agentName,
-  agentType,
-}) => {
+const TeamChatView: React.FC<TeamChatViewProps> = ({ conversation, hideSendBox, teamId, agentSlotId, agentName }) => {
+  // Single source of truth for the team greeting. Each *Chat simply forwards `emptySlot`
+  // to MessageList; the empty state itself reads teamId / backend / preset info from the
+  // shared SWR-cached conversation record, so none of that needs to flow through props.
+  const emptySlot = teamId ? <TeamChatEmptyState conversationId={conversation.id} /> : undefined;
   const content = (() => {
     switch (conversation.type) {
       case 'acp':
@@ -113,6 +114,7 @@ const TeamChatView: React.FC<TeamChatViewProps> = ({
             hideSendBox={hideSendBox}
             teamId={teamId}
             agentSlotId={agentSlotId}
+            emptySlot={emptySlot}
           />
         );
       case 'codex': // Legacy: codex now uses ACP protocol
@@ -126,10 +128,19 @@ const TeamChatView: React.FC<TeamChatViewProps> = ({
             hideSendBox={hideSendBox}
             teamId={teamId}
             agentSlotId={agentSlotId}
+            emptySlot={emptySlot}
           />
         );
       case 'aionrs':
-        return <AionrsTeamChat key={conversation.id} conversation={conversation as AionrsConversation} />;
+        return (
+          <AionrsTeamChat
+            key={conversation.id}
+            conversation={conversation as AionrsConversation}
+            teamId={teamId}
+            agentSlotId={agentSlotId}
+            emptySlot={emptySlot}
+          />
+        );
       case 'gemini':
         return (
           <GeminiTeamChat
@@ -138,8 +149,7 @@ const TeamChatView: React.FC<TeamChatViewProps> = ({
             hideSendBox={hideSendBox}
             teamId={teamId}
             agentSlotId={agentSlotId}
-            agentName={agentName}
-            agentType={agentType}
+            emptySlot={emptySlot}
           />
         );
       case 'openclaw-gateway':
@@ -149,6 +159,7 @@ const TeamChatView: React.FC<TeamChatViewProps> = ({
             conversation_id={conversation.id}
             workspace={conversation.extra?.workspace}
             hideSendBox={hideSendBox}
+            emptySlot={emptySlot}
           />
         );
       case 'nanobot':
@@ -158,6 +169,7 @@ const TeamChatView: React.FC<TeamChatViewProps> = ({
             conversation_id={conversation.id}
             workspace={conversation.extra?.workspace}
             hideSendBox={hideSendBox}
+            emptySlot={emptySlot}
           />
         );
       case 'remote':
@@ -167,6 +179,7 @@ const TeamChatView: React.FC<TeamChatViewProps> = ({
             conversation_id={conversation.id}
             workspace={conversation.extra?.workspace}
             hideSendBox={hideSendBox}
+            emptySlot={emptySlot}
           />
         );
       default:

@@ -9,9 +9,14 @@ import type { TTeam, TeamAgent } from './types';
 import { Mailbox } from './Mailbox';
 import { TaskManager } from './TaskManager';
 import { TeammateManager } from './TeammateManager';
-import { TeamMcpServer, type StdioMcpConfig } from './TeamMcpServer';
+import { TeamMcpServer, type StdioMcpConfig } from './mcp/team/TeamMcpServer';
 
-type SpawnAgentFn = (agentName: string, agentType?: string) => Promise<TeamAgent>;
+type SpawnAgentFn = (
+  agentName: string,
+  agentType?: string,
+  model?: string,
+  customAgentId?: string
+) => Promise<TeamAgent>;
 
 /**
  * Thin coordinator that owns Mailbox, TaskManager, TeammateManager, and MCP server.
@@ -41,9 +46,7 @@ export class TeamSession extends EventEmitter {
       teamId: team.id,
       agents: team.agents,
       mailbox: this.mailbox,
-      taskManager: this.taskManager,
       workerTaskManager,
-      spawnAgent,
       teamWorkspace: team.workspace || undefined,
       onAgentRemoved: (teamId, agents) => {
         void this.repo.update(teamId, { agents, updatedAt: Date.now() });
@@ -104,13 +107,13 @@ export class TeamSession extends EventEmitter {
 
   /**
    * Send a user message to the team.
-   * Ensures MCP server is started, then writes to the lead agent's mailbox and wakes the lead.
+   * Ensures MCP server is started, then writes to the leader agent's mailbox and wakes the leader.
    */
-  async sendMessage(content: string): Promise<void> {
+  async sendMessage(content: string, files?: string[]): Promise<void> {
     // Ensure MCP server is running before waking agents
     await this.startMcpServer();
 
-    const leadSlotId = this.team.leadAgentId;
+    const leadSlotId = this.team.leaderAgentId;
     const leadAgent = this.teammateManager.getAgents().find((a) => a.slotId === leadSlotId);
 
     await this.mailbox.write({
@@ -118,9 +121,10 @@ export class TeamSession extends EventEmitter {
       toAgentId: leadSlotId,
       fromAgentId: 'user',
       content,
+      files,
     });
 
-    // Persist user message in lead's conversation so it appears as a user bubble in the chat UI
+    // Persist user message in leader's conversation so it appears as a user bubble in the chat UI
     if (leadAgent?.conversationId) {
       const msgId = crypto.randomUUID();
       const userMessage: TMessage = {
@@ -145,10 +149,14 @@ export class TeamSession extends EventEmitter {
   }
 
   /**
-   * Send a user message directly to a specific agent (by slotId), bypassing the lead.
+   * Send a user message directly to a specific agent (by slotId), bypassing the leader.
    * Ensures MCP server is running, writes to agent's mailbox, persists user bubble, then wakes the agent.
    */
-  async sendMessageToAgent(slotId: string, content: string): Promise<void> {
+  async sendMessageToAgent(
+    slotId: string,
+    content: string,
+    options?: { silent?: boolean; files?: string[] }
+  ): Promise<void> {
     await this.startMcpServer();
 
     await this.mailbox.write({
@@ -156,10 +164,14 @@ export class TeamSession extends EventEmitter {
       toAgentId: slotId,
       fromAgentId: 'user',
       content,
+      files: options?.files,
     });
 
+    // When silent, skip the user bubble — the content still reaches the agent
+    // via mailbox → buildRolePrompt "Unread Messages". Used when the leader's
+    // conversation is reused and already contains the full user context.
     const agent = this.teammateManager.getAgents().find((a) => a.slotId === slotId);
-    if (agent?.conversationId) {
+    if (agent?.conversationId && !options?.silent) {
       const msgId = crypto.randomUUID();
       const userMessage: TMessage = {
         id: msgId,

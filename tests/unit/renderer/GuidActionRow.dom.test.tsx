@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -17,10 +17,33 @@ vi.mock('@arco-design/web-react', () => ({
   }: React.ComponentProps<'button'> & { icon?: React.ReactNode; loading?: boolean }) => (
     <button {...props}>{icon ?? children}</button>
   ),
-  Dropdown: ({ children }: React.PropsWithChildren) => <>{children}</>,
+  Dropdown: ({ children, droplist }: React.PropsWithChildren & { droplist?: React.ReactNode }) => (
+    <>
+      {droplist}
+      {children}
+    </>
+  ),
   Menu: Object.assign(({ children }: React.PropsWithChildren) => <div>{children}</div>, {
-    Item: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+    Item: ({ children, onClick }: React.PropsWithChildren & { onClick?: (e: any) => void }) => (
+      <div onClick={onClick}>{children}</div>
+    ),
+    SubMenu: ({ children, title }: React.PropsWithChildren & { title?: React.ReactNode }) => (
+      <div>
+        {title}
+        {children}
+      </div>
+    ),
   }),
+  Checkbox: ({
+    children,
+    checked,
+    onChange,
+  }: React.PropsWithChildren & { checked?: boolean; onChange?: () => void }) => (
+    <label>
+      <input type='checkbox' checked={checked} onChange={onChange} />
+      {children}
+    </label>
+  ),
   Message: {
     error: vi.fn(),
   },
@@ -29,7 +52,9 @@ vi.mock('@arco-design/web-react', () => ({
 
 vi.mock('@icon-park/react', () => ({
   ArrowUp: () => <span>ArrowUp</span>,
+  Brain: () => <span>Brain</span>,
   FolderOpen: () => <span>FolderOpen</span>,
+  Lightning: () => <span>Lightning</span>,
   Plus: () => <span>Plus</span>,
   Shield: () => <span>Shield</span>,
   UploadOne: () => <span>UploadOne</span>,
@@ -37,6 +62,10 @@ vi.mock('@icon-park/react', () => ({
 
 vi.mock('@/renderer/components/agent/AgentModeSelector', () => ({
   default: () => <div>AgentModeSelector</div>,
+}));
+
+vi.mock('@/renderer/components/agent/AcpConfigSelector', () => ({
+  default: () => null,
 }));
 
 vi.mock('@/renderer/hooks/context/LayoutContext', () => ({
@@ -49,7 +78,6 @@ vi.mock('@/renderer/services/FileService', () => ({
   FileService: {
     processDroppedFiles: vi.fn(),
   },
-  MAX_UPLOAD_SIZE_MB: 50,
   getCleanFileNames: (files: string[]) => files,
 }));
 
@@ -60,8 +88,9 @@ vi.mock('@/renderer/styles/colors', () => ({
   },
 }));
 
+const mockIsElectronDesktop = vi.fn(() => true);
 vi.mock('@/renderer/utils/platform', () => ({
-  isElectronDesktop: () => true,
+  isElectronDesktop: () => mockIsElectronDesktop(),
 }));
 
 vi.mock('@/renderer/utils/model/agentModes', () => ({
@@ -80,31 +109,93 @@ vi.mock('@/common', () => ({
 }));
 
 import GuidActionRow from '@/renderer/pages/guid/components/GuidActionRow';
+import { FileService } from '@/renderer/services/FileService';
 
 describe('GuidActionRow', () => {
-  it('renders the speech input control next to the send button', () => {
-    render(
-      <GuidActionRow
-        files={[]}
-        onFilesUploaded={vi.fn()}
-        onSelectWorkspace={vi.fn()}
-        modelSelectorNode={<div>ModelSelector</div>}
-        selectedAgent='gemini'
-        selectedMode='default'
-        onModeSelect={vi.fn()}
-        isPresetAgent={false}
-        selectedAgentInfo={undefined}
-        customAgents={[]}
-        localeKey='en-US'
-        onClosePresetTag={vi.fn()}
-        loading={false}
-        isButtonDisabled={false}
-        speechInputNode={<button aria-label='speech-input'>Mic</button>}
-        onSend={vi.fn()}
-      />
-    );
+  const defaultProps = {
+    files: [],
+    onFilesUploaded: vi.fn(),
+    onSelectWorkspace: vi.fn(),
+    modelSelectorNode: <div>ModelSelector</div>,
+    selectedAgent: 'gemini',
+    selectedMode: 'default',
+    onModeSelect: vi.fn(),
+    isPresetAgent: false,
+    selectedAgentInfo: undefined,
+    customAgents: [],
+    localeKey: 'en-US',
+    onClosePresetTag: vi.fn(),
+    builtinAutoSkills: [] as Array<{ name: string; description: string }>,
+    disabledBuiltinSkills: [] as string[],
+    onToggleBuiltinSkill: vi.fn(),
+    loading: false,
+    isButtonDisabled: false,
+    speechInputNode: <button aria-label='speech-input'>Mic</button>,
+    onSend: vi.fn(),
+  };
 
+  it('renders the speech input control next to the send button', () => {
+    render(<GuidActionRow {...defaultProps} />);
     expect(screen.getByLabelText('speech-input')).toBeInTheDocument();
     expect(screen.getByText('ArrowUp')).toBeInTheDocument();
+  });
+
+  it('displays skill count when builtin skills are provided', () => {
+    const skills = [
+      { name: 'web-search', description: 'Search the web' },
+      { name: 'code-interpreter', description: 'Run code' },
+    ];
+
+    render(<GuidActionRow {...defaultProps} builtinAutoSkills={skills} />);
+
+    expect(screen.getByText('settings.autoInjectedSkills (2/2)', { exact: false })).toBeInTheDocument();
+  });
+
+  it('calls onToggleBuiltinSkill when skill checkbox is toggled', () => {
+    const skills = [
+      { name: 'web-search', description: 'Search the web' },
+      { name: 'code-interpreter', description: 'Run code' },
+    ];
+    const onToggle = vi.fn();
+
+    render(<GuidActionRow {...defaultProps} builtinAutoSkills={skills} onToggleBuiltinSkill={onToggle} />);
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[0]);
+
+    expect(onToggle).toHaveBeenCalledWith('web-search');
+  });
+
+  it('renders standalone workspace button and calls onSelectWorkspace on click', async () => {
+    const { ipcBridge } = await import('@/common');
+    const onSelectWorkspace = vi.fn();
+    vi.mocked(ipcBridge.dialog.showOpen.invoke).mockResolvedValueOnce(['/chosen/path']);
+
+    render(<GuidActionRow {...defaultProps} onSelectWorkspace={onSelectWorkspace} />);
+
+    const workspaceBtn = screen.getByText('conversation.welcome.specifyWorkspace');
+    fireEvent.click(workspaceBtn);
+
+    await vi.waitFor(() => {
+      expect(ipcBridge.dialog.showOpen.invoke).toHaveBeenCalledWith({
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      expect(onSelectWorkspace).toHaveBeenCalledWith('/chosen/path');
+    });
+  });
+
+  it('shows generic error toast when file upload fails', async () => {
+    mockIsElectronDesktop.mockReturnValueOnce(false); // WebUI mode so file input is rendered
+    const { Message } = await import('@arco-design/web-react');
+    vi.mocked(FileService.processDroppedFiles).mockRejectedValueOnce(new Error('Upload failed'));
+
+    render(<GuidActionRow {...defaultProps} />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+
+    const file = new File(['content'], 'test.txt', { type: 'text/plain' });
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    await fireEvent.change(fileInput);
+
+    expect(Message.error).toHaveBeenCalledWith('common.fileAttach.failed');
   });
 });

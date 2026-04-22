@@ -26,8 +26,10 @@ import {
 // ---------------------------------------------------------------------------
 
 describe('getAgentKey', () => {
-  it('returns "custom:<id>" for custom agents with customAgentId', () => {
+  it('returns "custom:<id>" for agents with customAgentId', () => {
     expect(getAgentKey({ backend: 'custom', customAgentId: 'abc-123' })).toBe('custom:abc-123');
+    // Preset assistants now use actual backend type but still get custom: prefix
+    expect(getAgentKey({ backend: 'claude', customAgentId: 'preset-1' })).toBe('custom:preset-1');
   });
 
   it('returns backend directly for non-custom agents', () => {
@@ -60,6 +62,17 @@ describe('savePreferredMode', () => {
     expect(configStorageMocks.get).toHaveBeenCalledWith('gemini.config');
     expect(configStorageMocks.set).toHaveBeenCalledWith('gemini.config', {
       yoloMode: false,
+      preferredMode: 'yolo',
+    });
+  });
+
+  it('saves preferred mode for aionrs under aionrs.config', async () => {
+    configStorageMocks.get.mockResolvedValue({});
+
+    await savePreferredMode('aionrs', 'yolo');
+
+    expect(configStorageMocks.get).toHaveBeenCalledWith('aionrs.config');
+    expect(configStorageMocks.set).toHaveBeenCalledWith('aionrs.config', {
       preferredMode: 'yolo',
     });
   });

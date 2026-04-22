@@ -1,8 +1,6 @@
-import { CloseSmall, Edit, Plus } from '@icon-park/react';
+import { CloseSmall, Edit } from '@icon-park/react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { iconColors } from '@/renderer/styles/colors';
 import type { TeammateStatus } from '@/common/types/teamTypes';
-import AddAgentModal from './AddAgentModal';
 import AgentStatusBadge from './AgentStatusBadge';
 import TeamAgentIdentity from './TeamAgentIdentity';
 import { useTeamTabs } from '../hooks/TeamTabsContext';
@@ -15,9 +13,12 @@ type TeamTabViewProps = {
   slotId: string;
   agentName: string;
   agentType: string;
+  conversationId?: string;
   isActive: boolean;
   status: TeammateStatus;
-  isLead: boolean;
+  isLeader: boolean;
+  /** Number of pending permission confirmations for this agent */
+  pendingCount?: number;
   onSwitch: (slotId: string) => void;
   onRename?: (slotId: string, newName: string) => void;
   onRemove?: (slotId: string) => void;
@@ -31,9 +32,11 @@ const TeamTabView: React.FC<TeamTabViewProps> = ({
   slotId,
   agentName,
   agentType,
+  conversationId,
   isActive,
   status,
-  isLead,
+  isLeader,
+  pendingCount = 0,
   onSwitch,
   onRename,
   onRemove,
@@ -88,7 +91,7 @@ const TeamTabView: React.FC<TeamTabViewProps> = ({
 
   return (
     <div
-      draggable={!isLead}
+      draggable={!isLeader}
       className={`relative group flex items-center gap-8px px-12px h-full max-w-240px cursor-pointer transition-all duration-200 shrink-0 border-r border-[color:var(--border-base)] ${
         isActive
           ? 'bg-[color:var(--color-primary-1)] text-[color:var(--color-text-1)] border-t-2 border-t-solid border-t-[color:var(--color-primary-6)]'
@@ -122,14 +125,26 @@ const TeamTabView: React.FC<TeamTabViewProps> = ({
           onKeyDown={handleKeyDown}
         />
       ) : (
-        <TeamAgentIdentity
-          agentName={agentName}
-          agentType={agentType}
-          isLead={isLead}
-          className='min-w-0 flex-1'
-          logoClassName={`w-14px h-14px object-contain rounded-2px ${isActive ? 'opacity-100' : 'opacity-70'}`}
-          nameClassName='text-15px whitespace-nowrap overflow-hidden text-ellipsis select-none'
-        />
+        <div className='min-w-0 flex-1 flex items-center gap-4px'>
+          {pendingCount > 0 && (
+            <span
+              className='shrink-0 text-14px leading-none animate-wiggle'
+              title={`${pendingCount} pending permission request(s)`}
+            >
+              ‼️
+            </span>
+          )}
+          <TeamAgentIdentity
+            agentName={agentName}
+            agentType={agentType}
+            conversationId={conversationId}
+            isLeader={isLeader}
+            className='min-w-0 flex-1'
+            logoClassName={`w-14px h-14px object-contain rounded-2px ${isActive ? 'opacity-100' : 'opacity-70'}`}
+            avatarClassName={`w-14px h-14px rounded-2px flex items-center justify-center text-11px leading-none bg-fill-2 shrink-0 ${isActive ? 'opacity-100' : 'opacity-80'}`}
+            nameClassName='text-15px whitespace-nowrap overflow-hidden text-ellipsis select-none'
+          />
+        </div>
       )}
       <AgentStatusBadge status={status} />
       {!editing && onRename && (
@@ -140,7 +155,7 @@ const TeamTabView: React.FC<TeamTabViewProps> = ({
           <Edit theme='outline' size='12' fill='currentColor' />
         </span>
       )}
-      {!editing && !isLead && onRemove && (
+      {!editing && !isLeader && onRemove && (
         <span
           className='opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity duration-150 shrink-0 flex items-center text-[color:var(--color-text-3)] hover:text-[color:var(--color-danger-6)]'
           onClick={(e) => {
@@ -155,37 +170,17 @@ const TeamTabView: React.FC<TeamTabViewProps> = ({
   );
 };
 
-type AddAgentTriggerProps = {
-  onAddAgent: (data: { agentName: string; agentKey: string }) => void;
-};
-
-const AddAgentTrigger: React.FC<AddAgentTriggerProps> = ({ onAddAgent }) => {
-  const [modalVisible, setModalVisible] = useState(false);
-
-  return (
-    <>
-      <div
-        className='flex items-center justify-center w-40px h-40px shrink-0 cursor-pointer hover:bg-[var(--fill-2)] transition-colors duration-200'
-        style={{ borderLeft: '1px solid var(--border-base)' }}
-        onClick={() => setModalVisible(true)}
-      >
-        <Plus theme='outline' size='16' fill={iconColors.primary} strokeWidth={3} />
-      </div>
-      <AddAgentModal visible={modalVisible} onClose={() => setModalVisible(false)} onConfirm={onAddAgent} />
-    </>
-  );
-};
-
 type TeamTabsProps = {
-  onAddAgent: (data: { agentName: string; agentKey: string }) => void;
   onTabClick?: (slotId: string) => void;
+  /** Pending permission confirmation counts per slot ID */
+  pendingCounts?: Map<string, number>;
 };
 
 /**
  * Tab bar for team mode showing agent tabs with status badges.
  * Supports scroll overflow with fade indicators and add-agent dropdown.
  */
-const TeamTabs: React.FC<TeamTabsProps> = ({ onAddAgent, onTabClick }) => {
+const TeamTabs: React.FC<TeamTabsProps> = ({ onTabClick, pendingCounts }) => {
   const { agents, activeSlotId, statusMap, switchTab, renameAgent, removeAgent, reorderAgents } = useTeamTabs();
   const tabsContainerRef = useRef<HTMLDivElement>(null);
   const [showLeftFade, setShowLeftFade] = useState(false);
@@ -257,9 +252,11 @@ const TeamTabs: React.FC<TeamTabsProps> = ({ onAddAgent, onTabClick }) => {
                 slotId={agent.slotId}
                 agentName={agent.agentName}
                 agentType={agent.agentType}
+                conversationId={agent.conversationId}
                 isActive={agent.slotId === activeSlotId}
                 status={statusInfo?.status ?? agent.status}
-                isLead={agent.role === 'lead'}
+                isLeader={agent.role === 'leader'}
+                pendingCount={pendingCounts?.get(agent.slotId) ?? 0}
                 onSwitch={(slotId) => {
                   switchTab(slotId);
                   onTabClick?.(slotId);
@@ -274,7 +271,6 @@ const TeamTabs: React.FC<TeamTabsProps> = ({ onAddAgent, onTabClick }) => {
             );
           })}
         </div>
-        {/* AddAgentTrigger hidden — agents are created by the leader via MCP tools */}
         {showLeftFade && (
           <div
             className='pointer-events-none absolute left-0 top-0 bottom-0 w-32px z-10'

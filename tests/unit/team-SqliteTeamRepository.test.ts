@@ -25,12 +25,12 @@ function makeTeam(overrides: Partial<TTeam> = {}): TTeam {
     name: 'Test Team',
     workspace: '/tmp/workspace',
     workspaceMode: 'shared',
-    leadAgentId: 'slot-1',
+    leaderAgentId: 'slot-1',
     agents: [
       {
         slotId: 'slot-1',
         conversationId: 'conv-1',
-        role: 'lead',
+        role: 'leader',
         agentType: 'acp',
         agentName: 'Claude',
         conversationType: 'acp',
@@ -72,7 +72,7 @@ describeOrSkip('SqliteTeamRepository', () => {
     expect(found).not.toBeNull();
     expect(found!.name).toBe('Test Team');
     expect(found!.agents).toHaveLength(1);
-    expect(found!.agents[0].role).toBe('lead');
+    expect(found!.agents[0].role).toBe('leader');
   });
 
   it('lists teams by userId', async () => {
@@ -139,6 +139,32 @@ describeOrSkip('SqliteTeamRepository', () => {
     it('returns empty array when no unread messages exist', async () => {
       const result = await repo.readUnreadAndMark('team-1', 'agent-a');
       expect(result).toHaveLength(0);
+    });
+
+    it('round-trips files through JSON serialization', async () => {
+      const files = ['/tmp/workspace/image.png', '/tmp/workspace/doc.pdf'];
+      await repo.writeMessage({ ...msg('m-files'), files });
+
+      const result = await repo.readUnreadAndMark('team-1', 'agent-a');
+      expect(result).toHaveLength(1);
+      expect(result[0].files).toEqual(files);
+    });
+
+    it('returns undefined files when message has no files', async () => {
+      await repo.writeMessage(msg('m-no-files'));
+
+      const result = await repo.readUnreadAndMark('team-1', 'agent-a');
+      expect(result).toHaveLength(1);
+      expect(result[0].files).toBeUndefined();
+    });
+
+    it('handles empty files array', async () => {
+      await repo.writeMessage({ ...msg('m-empty-files'), files: [] });
+
+      const result = await repo.readUnreadAndMark('team-1', 'agent-a');
+      expect(result).toHaveLength(1);
+      // Empty array serializes to '[]', deserializes back to []
+      expect(result[0].files).toEqual([]);
     });
   });
 

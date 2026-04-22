@@ -12,6 +12,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('@/renderer/hooks/context/AuthContext', () => ({
+  useAuth: () => ({ logout: vi.fn(), status: 'authenticated' }),
+}));
+
 vi.mock('@/renderer/hooks/context/LayoutContext', () => ({
   useLayoutContext: () => ({ isMobile: false }),
 }));
@@ -37,15 +41,15 @@ vi.mock('@/renderer/utils/ui/focus', () => ({
   blurActiveElement: vi.fn(),
 }));
 
-vi.mock('@/renderer/components/layout/Sider/SiderToolbar', () => ({
+vi.mock('@/renderer/components/layout/Sider/SiderNav/SiderToolbar', () => ({
   default: () => <div data-testid='sider-toolbar' />,
 }));
 
-vi.mock('@/renderer/components/layout/Sider/SiderSearchEntry', () => ({
+vi.mock('@/renderer/components/layout/Sider/SiderNav/SiderSearchEntry', () => ({
   default: () => <div data-testid='sider-search-entry' />,
 }));
 
-vi.mock('@/renderer/components/layout/Sider/SiderScheduledEntry', () => ({
+vi.mock('@/renderer/components/layout/Sider/SiderNav/SiderScheduledEntry', () => ({
   default: () => <div data-testid='sider-scheduled-entry' />,
 }));
 
@@ -89,7 +93,7 @@ describe('Sider team entry visibility', () => {
         name: 'Alpha Team',
         workspace: '',
         workspaceMode: 'shared',
-        leadAgentId: 'lead-1',
+        leaderAgentId: 'lead-1',
         agents: [],
         createdAt: 1,
         updatedAt: 1,

@@ -5,7 +5,7 @@
  */
 
 import { getDatabase } from '@process/services/database';
-import type { AcpBackendAll } from '@/common/types/acpTypes';
+import type { AgentBackend } from '@/common/types/acpTypes';
 
 /**
  * Cron schedule types
@@ -21,6 +21,7 @@ export type CronSchedule =
 export type CronJob = {
   id: string;
   name: string;
+  description?: string;
   enabled: boolean;
   schedule: CronSchedule;
   target: {
@@ -30,12 +31,12 @@ export type CronJob = {
   metadata: {
     conversationId: string;
     conversationTitle?: string;
-    agentType: AcpBackendAll;
+    agentType: AgentBackend;
     createdBy: 'user' | 'agent';
     createdAt: number;
     updatedAt: number;
     agentConfig?: {
-      backend: AcpBackendAll;
+      backend: AgentBackend;
       name: string;
       cliPath?: string;
       isPreset?: boolean;
@@ -64,6 +65,7 @@ export type CronJob = {
 type CronJobRow = {
   id: string;
   name: string;
+  description: string | null;
   enabled: number;
   schedule_kind: string;
   schedule_value: string;
@@ -105,6 +107,7 @@ function jobToRow(job: CronJob): CronJobRow {
   return {
     id: job.id,
     name: job.name,
+    description: job.description ?? null,
     enabled: job.enabled ? 1 : 0,
     schedule_kind: kind,
     schedule_value: scheduleValue,
@@ -164,6 +167,7 @@ function rowToJob(row: CronJobRow): CronJob {
   return {
     id: row.id,
     name: row.name,
+    description: row.description ?? undefined,
     enabled: row.enabled === 1,
     schedule,
     target: {
@@ -173,7 +177,7 @@ function rowToJob(row: CronJobRow): CronJob {
     metadata: {
       conversationId: row.conversation_id,
       conversationTitle: row.conversation_title ?? undefined,
-      agentType: row.agent_type as AcpBackendAll,
+      agentType: row.agent_type as AgentBackend,
       createdBy: row.created_by as 'user' | 'agent',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -206,19 +210,20 @@ class CronStore {
       .prepare(
         `
       INSERT INTO cron_jobs (
-        id, name, enabled,
+        id, name, description, enabled,
         schedule_kind, schedule_value, schedule_tz, schedule_description,
         payload_message, execution_mode, agent_config,
         conversation_id, conversation_title, agent_type, created_by,
         created_at, updated_at,
         next_run_at, last_run_at, last_status, last_error,
         run_count, retry_count, max_retries
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
       )
       .run(
         row.id,
         row.name,
+        row.description,
         row.enabled,
         row.schedule_kind,
         row.schedule_value,
@@ -249,7 +254,7 @@ class CronStore {
   async update(jobId: string, updates: Partial<CronJob>): Promise<void> {
     const existing = await this.getById(jobId);
     if (!existing) {
-      throw new Error(`Cron job not found: ${jobId}`);
+      return;
     }
 
     const updated: CronJob = {
@@ -278,7 +283,7 @@ class CronStore {
       .prepare(
         `
       UPDATE cron_jobs SET
-        name = ?, enabled = ?,
+        name = ?, description = ?, enabled = ?,
         schedule_kind = ?, schedule_value = ?, schedule_tz = ?, schedule_description = ?,
         payload_message = ?, execution_mode = ?, agent_config = ?,
         conversation_id = ?, conversation_title = ?, agent_type = ?,
@@ -290,6 +295,7 @@ class CronStore {
       )
       .run(
         row.name,
+        row.description,
         row.enabled,
         row.schedule_kind,
         row.schedule_value,

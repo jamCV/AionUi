@@ -11,7 +11,7 @@ import { ipcBridge } from '@/common';
 import type { CronMessageMeta, TMessage } from '@/common/chat/chatLib';
 import type { IResponseMessage } from '@/common/adapter/ipcBridge';
 import type { TChatConversation, TProviderWithModel } from '@/common/config/storage';
-import type { AcpBackendAll } from '@/common/types/acpTypes';
+import type { AcpBackendAll, AgentBackend } from '@/common/types/acpTypes';
 import { uuid } from '@/common/utils';
 import type BaseAgentManager from '@process/task/BaseAgentManager';
 import type { IWorkerTaskManager } from '@process/task/IWorkerTaskManager';
@@ -24,6 +24,7 @@ import type { CronJob } from './CronStore';
 import type { ICronJobExecutor } from './ICronJobExecutor';
 import { addMessage } from '@process/utils/message';
 import { getCronSkillDir, hasCronSkillFile } from './cronSkillFile';
+import { AcpSkillManager } from '@process/task/AcpSkillManager';
 import { skillSuggestWatcher } from './SkillSuggestWatcher';
 
 /** Lazy-import to break circular dependency: cronServiceSingleton ↔ conversationServiceSingleton */
@@ -133,11 +134,12 @@ export class WorkerTaskManagerJobExecutor implements ICronJobExecutor {
 
     const hasSkill = await hasCronSkillFile(job.id);
     const needsSkillSuggest = job.target.executionMode === 'new_conversation' && !!workspace && !hasSkill;
-    const isGemini = job.metadata.agentConfig?.backend === 'gemini';
+    const isGeminiLike =
+      job.metadata.agentConfig?.backend === 'gemini' || job.metadata.agentConfig?.backend === 'aionrs';
 
-    // Gemini: inline SKILL_SUGGEST instructions in the task prompt (single-turn).
+    // Gemini/Aionrs: inline SKILL_SUGGEST instructions in the task prompt (single-turn).
     // Other agents: separate follow-up message via onFirstFinish (multi-turn).
-    const messageText = this.buildMessageText(job, hasSkill, needsSkillSuggest && isGemini);
+    const messageText = this.buildMessageText(job, hasSkill, needsSkillSuggest && isGeminiLike);
 
     const triggeredAt = Date.now();
     const cronMeta: CronMessageMeta = {
@@ -168,8 +170,8 @@ export class WorkerTaskManagerJobExecutor implements ICronJobExecutor {
       // Defensively unregister first in case a previous execution left a stale entry
       skillSuggestWatcher.unregister(conversationId);
 
-      if (isGemini) {
-        // Gemini: SKILL_SUGGEST instructions are already in the prompt.
+      if (isGeminiLike) {
+        // Gemini/Aionrs: SKILL_SUGGEST instructions are already in the prompt.
         // Just register the watcher (no onFirstFinish) and start polling.
         skillSuggestWatcher.register(conversationId, job.id, workspace!);
         void this.detectSkillSuggestWithRetry(job.id, workspace!, conversationId, 0);
@@ -232,6 +234,22 @@ export class WorkerTaskManagerJobExecutor implements ICronJobExecutor {
     const service = await getConversationService();
     const conversation = await service.createConversation(params);
 
+    // Persist loaded skills snapshot so ConversationSkillsIndicator can display them
+    try {
+      const excludeBuiltinSkills = (params.extra as { excludeBuiltinSkills?: string[] })?.excludeBuiltinSkills;
+      const skillManager = AcpSkillManager.getInstance();
+      await skillManager.discoverSkills(undefined, excludeBuiltinSkills);
+      const excludeSet = new Set(excludeBuiltinSkills ?? []);
+      const loadedSkills = skillManager.getSkillsIndex().filter((s) => !excludeSet.has(s.name));
+      if (loadedSkills.length > 0) {
+        const updatedExtra = { ...conversation.extra, loadedSkills };
+        service.updateConversation(conversation.id, { extra: updatedExtra } as Partial<typeof conversation>);
+        conversation.extra = updatedExtra as typeof conversation.extra;
+      }
+    } catch (error) {
+      console.warn('[CronExecutor] Failed to persist loadedSkills:', error);
+    }
+
     // Notify frontend so sider updates immediately
     ipcBridge.conversation.listChanged.emit({
       conversationId: conversation.id,
@@ -266,12 +284,14 @@ export class WorkerTaskManagerJobExecutor implements ICronJobExecutor {
   /**
    * Map backend identifier to the AgentType used by createConversation.
    */
-  private getAgentType(backend: AcpBackendAll): AgentType {
+  private getAgentType(backend: AgentBackend): AgentType {
     switch (backend) {
       case 'gemini':
         return 'gemini';
+      case 'aionrs':
+        return 'aionrs';
       case 'openclaw-gateway':
-      case 'openclaw' as AcpBackendAll:
+      case 'openclaw' as AgentBackend:
         return 'openclaw-gateway';
       case 'nanobot':
         return 'nanobot';
@@ -360,6 +380,9 @@ export class WorkerTaskManagerJobExecutor implements ICronJobExecutor {
       } else if (typeof savedModel === 'string') {
         preferredModelId = savedModel;
       }
+    } else if (backend === 'aionrs') {
+      const savedModel = await ProcessConfig.get('aionrs.defaultModel');
+      preferredModelId = savedModel?.useModel;
     } else {
       const acpConfig = await ProcessConfig.get('acp.config');
       preferredModelId = (acpConfig?.[backend as AcpBackendAll] as Record<string, unknown>)?.preferredModelId as

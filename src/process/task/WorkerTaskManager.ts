@@ -44,7 +44,7 @@ export class WorkerTaskManager implements IWorkerTaskManager {
       const now = Date.now();
       const idleTasks = this.taskList.filter(
         (item) =>
-          item.task.type === 'acp' &&
+          (item.task.type === 'acp' || item.task.type === 'aionrs') &&
           item.task.status === 'finished' &&
           !cronBusyGuard.isProcessing(item.id) &&
           now - item.task.lastActivityAt > timeoutMs
@@ -80,6 +80,9 @@ export class WorkerTaskManager implements IWorkerTaskManager {
   addTask(id: string, task: IAgentManager): void {
     const existing = this.taskList.find((item) => item.id === id);
     if (existing) {
+      // Kill the old process before replacing to prevent orphaned child processes.
+      // Without this, getOrBuildTask(skipCache: true) leaves the old agent running.
+      existing.task.kill();
       existing.task = task;
     } else {
       this.taskList.push({ id, task });

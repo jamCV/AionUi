@@ -27,12 +27,21 @@ export type TokenUsage = {
   cache_write_tokens?: number;
 };
 
+export type AionrsCapabilities = {
+  tool_approval: boolean;
+  thinking: boolean;
+  effort: boolean;
+  effort_levels: string[];
+  modes: string[];
+  mcp: boolean;
+};
+
 export type AionrsEvent =
   | {
       type: 'ready';
       version: string;
       session_id?: string;
-      capabilities: { tool_approval: boolean; thinking: boolean; mcp: boolean };
+      capabilities: AionrsCapabilities;
     }
   | { type: 'stream_start'; msg_id: string }
   | { type: 'text_delta'; text: string; msg_id: string }
@@ -66,16 +75,35 @@ export type AionrsEvent =
       msg_id: string | null;
       error: { code: string; message: string; retryable: boolean };
     }
-  | { type: 'info'; msg_id: string; message: string };
+  | { type: 'info'; msg_id: string; message: string }
+  | { type: 'config_changed'; capabilities: AionrsCapabilities }
+  | { type: 'mcp_ready'; name: string; tools: string[] };
 
 // ============================================
 // Client -> Agent Commands (stdin)
 // ============================================
 
 export type AionrsCommand =
-  | { type: 'message'; msg_id: string; input: string; files?: string[] }
+  | { type: 'message'; msg_id: string; content: string; files?: string[] }
   | { type: 'stop' }
   | { type: 'tool_approve'; call_id: string; scope: 'once' | 'always' }
   | { type: 'tool_deny'; call_id: string; reason?: string }
   | { type: 'init_history'; text: string }
-  | { type: 'set_mode'; mode: 'default' | 'auto_edit' | 'yolo' };
+  | { type: 'set_mode'; mode: 'default' | 'auto_edit' | 'yolo' }
+  | {
+      type: 'set_config';
+      model?: string;
+      thinking?: string;
+      thinking_budget?: number;
+      effort?: string;
+    }
+  | {
+      type: 'add_mcp_server';
+      name: string;
+      transport: string;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+    };

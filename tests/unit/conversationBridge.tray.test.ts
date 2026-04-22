@@ -13,6 +13,7 @@ type Provider = (payload?: unknown) => Promise<unknown>;
 let handlers: Record<string, Provider> = {};
 
 const mockRefreshTrayMenu = vi.fn(async () => {});
+const mockRemoveFromMessageCache = vi.fn();
 
 const createCommand = (key: string) => ({
   provider: vi.fn((fn: Provider) => {
@@ -68,6 +69,7 @@ const registerMocks = () => {
         getWorkspace: createCommand('conversation.getWorkspace'),
         responseSearchWorkSpace: { invoke: vi.fn() },
         stop: createCommand('conversation.stop'),
+        setConfig: createCommand('conversation.setConfig'),
         getSlashCommands: createCommand('conversation.getSlashCommands'),
         askSideQuestion: createCommand('conversation.askSideQuestion'),
         sendMessage: createCommand('conversation.sendMessage'),
@@ -94,6 +96,8 @@ const registerMocks = () => {
 
   vi.doMock('@process/utils/initStorage', () => ({
     getSkillsDir: vi.fn(() => '/mock/skills'),
+    getBuiltinSkillsCopyDir: vi.fn(() => '/mock/builtin-skills'),
+    getSystemDir: vi.fn(() => ({ cacheDir: '/mock/cache' })),
     ProcessChat: { get: vi.fn(async () => []) },
     ProcessConfig: { get: vi.fn(async () => []) },
   }));
@@ -104,6 +108,15 @@ const registerMocks = () => {
 
   vi.doMock('@process/utils/tray', () => ({
     refreshTrayMenu: mockRefreshTrayMenu,
+  }));
+
+  vi.doMock('@process/utils/message', () => ({
+    removeFromMessageCache: mockRemoveFromMessageCache,
+  }));
+
+  vi.doMock('@process/utils', () => ({
+    copyFilesToDirectory: vi.fn(),
+    readDirectoryRecursive: vi.fn(),
   }));
 
   vi.doMock('@/process/utils', () => ({
@@ -171,6 +184,7 @@ describe('conversationBridge tray sync', () => {
     expect(result).toBe(true);
     expect(mockWorkerTaskManager.kill).toHaveBeenCalledWith('conv-1');
     expect(mockConversationService.deleteConversation).toHaveBeenCalledWith('conv-1');
+    expect(mockRemoveFromMessageCache).toHaveBeenCalledWith('conv-1');
     expect(mockRefreshTrayMenu).toHaveBeenCalledOnce();
   });
 

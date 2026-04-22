@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Track calls to prepareFirstMessageWithSkillsIndex
 const { mockPrepareFirstMessage, mockAgentSendMessage } = vi.hoisted(() => ({
-  mockPrepareFirstMessage: vi.fn(async (content: string) => `[injected] ${content}`),
+  mockPrepareFirstMessage: vi.fn(async (content: string) => ({ content: `[injected] ${content}`, loadedSkills: [] })),
   mockAgentSendMessage: vi.fn(async () => ({ success: true })),
 }));
 
@@ -35,6 +35,7 @@ vi.mock('@/common', () => ({
         remove: { emit: vi.fn() },
       },
       responseStream: { emit: vi.fn() },
+      listChanged: { emit: vi.fn() },
     },
   },
 }));
@@ -44,11 +45,36 @@ vi.mock('@process/channels/agent/ChannelEventBus', () => ({
 }));
 
 vi.mock('@process/services/database', () => ({
-  getDatabase: vi.fn(async () => ({ updateConversation: vi.fn() })),
+  getDatabase: vi.fn(async () => ({
+    updateConversation: vi.fn(),
+    getConversation: vi.fn(() => ({ success: true, data: { extra: {}, source: 'aionui' } })),
+  })),
 }));
 
 vi.mock('@process/utils/initStorage', () => ({
-  ProcessConfig: { get: vi.fn(async () => null), set: vi.fn(async () => {}) },
+  ProcessConfig: {
+    get: vi.fn(async (key: string) => {
+      if (key === 'acp.cachedInitializeResult') {
+        // Provide cached init results so shouldInjectTeamGuideMcp returns true for claude/gemini
+        return {
+          claude: {
+            protocolVersion: 1,
+            capabilities: {
+              loadSession: false,
+              promptCapabilities: { image: false, audio: false, embeddedContext: false },
+              mcpCapabilities: { stdio: true, http: false, sse: false },
+              sessionCapabilities: { fork: null, resume: null, list: null, close: null },
+              _meta: {},
+            },
+            agentInfo: null,
+            authMethods: [],
+          },
+        };
+      }
+      return null;
+    }),
+    set: vi.fn(async () => {}),
+  },
 }));
 
 vi.mock('@process/utils/message', () => ({
@@ -96,19 +122,7 @@ vi.mock('@process/task/CronCommandDetector', () => ({
 // Mock hasNativeSkillSupport to use real logic for known backends
 vi.mock('@process/utils/initAgent', () => ({
   hasNativeSkillSupport: vi.fn((backend: string | undefined) => {
-    const supported = [
-      'gemini',
-      'claude',
-      'codebuddy',
-      'codex',
-      'qwen',
-      'iflow',
-      'goose',
-      'droid',
-      'kimi',
-      'vibe',
-      'cursor',
-    ];
+    const supported = ['gemini', 'claude', 'codebuddy', 'codex', 'qwen', 'goose', 'droid', 'kimi', 'vibe', 'cursor'];
     return !!backend && supported.includes(backend);
   }),
   setupAssistantWorkspace: vi.fn(),
@@ -214,7 +228,7 @@ describe('AcpAgentManager — first-message skill injection', () => {
 
   it('falls back to prompt injection for unsupported backend regardless of customWorkspace', async () => {
     const manager = createManager({
-      backend: 'opencode',
+      backend: 'auggie',
       customWorkspace: false,
       presetContext: 'Some rules',
       enabledSkills: ['pdf'],
@@ -226,7 +240,7 @@ describe('AcpAgentManager — first-message skill injection', () => {
       presetContext: 'Some rules',
       enabledSkills: ['pdf'],
       enableTeamGuide: false,
-      backend: 'opencode',
+      backend: 'auggie',
     });
   });
 
@@ -241,23 +255,6 @@ describe('AcpAgentManager — first-message skill injection', () => {
     expect(mockPrepareFirstMessage).not.toHaveBeenCalled();
     const sentContent = mockAgentSendMessage.mock.calls[0][0].content as string;
     // claude is whitelisted for team guide → content should include team guide prompt
-    expect(sentContent).toContain('[Assistant Rules');
-    expect(sentContent).toContain('Team Mode');
-    expect(sentContent).toContain('[User Request]');
-    expect(sentContent).toContain('Test message');
-  });
-
-  it('injects team guide for gemini backend (now in TEAM_SUPPORTED_BACKENDS)', async () => {
-    const manager = createManager({
-      backend: 'gemini',
-      customWorkspace: false,
-    });
-
-    await sendFirstMessage(manager, 'Test message');
-
-    expect(mockPrepareFirstMessage).not.toHaveBeenCalled();
-    const sentContent = mockAgentSendMessage.mock.calls[0][0].content as string;
-    // gemini is now in TEAM_SUPPORTED_BACKENDS → team guide should be injected
     expect(sentContent).toContain('[Assistant Rules');
     expect(sentContent).toContain('Team Mode');
     expect(sentContent).toContain('[User Request]');

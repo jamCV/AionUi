@@ -29,6 +29,7 @@ vi.mock('@office-ai/platform', () => ({
 vi.mock('@process/utils/initStorage', () => ({
   getSkillsDir: () => '/mock/skills',
   getBuiltinSkillsCopyDir: () => '/mock/skills/_builtin',
+  getAutoSkillsDir: () => '/mock/skills/_builtin/_auto',
   getSystemDir: () => ({
     workDir: '/mock/work',
     cacheDir: '/mock/cache',
@@ -54,6 +55,7 @@ vi.mock('@/common', () => ({
       readFile: makeProvider('readFile'),
       readFileBuffer: makeProvider('readFileBuffer'),
       createTempFile: makeProvider('createTempFile'),
+      createUploadFile: makeProvider('createUploadFile'),
       writeFile: makeProvider('writeFile'),
       createZip: makeProvider('createZip'),
       cancelZip: makeProvider('cancelZip'),
@@ -84,6 +86,7 @@ vi.mock('@/common', () => ({
       removeCustomExternalPath: makeProvider('removeCustomExternalPath'),
       enableSkillsMarket: makeProvider('enableSkillsMarket'),
       disableSkillsMarket: makeProvider('disableSkillsMarket'),
+      listBuiltinAutoSkills: makeProvider('listBuiltinAutoSkills'),
     },
     fileStream: { contentUpdate: { emit: vi.fn() } },
   },

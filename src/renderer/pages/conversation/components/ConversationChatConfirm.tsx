@@ -1,7 +1,6 @@
 import { ipcBridge } from '@/common';
 import type { IConfirmation } from '@/common/chat/chatLib';
 import { useConversationContextSafe } from '@/renderer/hooks/context/ConversationContext';
-import { useTeamPermission } from '@/renderer/pages/team/hooks/TeamPermissionContext';
 import { Divider, Typography } from '@arco-design/web-react';
 import type { PropsWithChildren } from 'react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -20,16 +19,13 @@ const ConversationChatConfirm: React.FC<PropsWithChildren<{ conversation_id: str
   const { t } = useTranslation();
   const conversationContext = useConversationContextSafe();
   const agentType = conversationContext?.type || 'unknown';
-  const teamPermission = useTeamPermission();
 
-  // In team mode: confirmation UI is handled by TeamConfirmOverlay at the page level.
-  // Each slot's ConversationChatConfirm only passes through children without showing any dialog.
-  // In standalone mode: only this conversation.
+  // Each agent's ConversationChatConfirm handles only its own conversation_id.
+  // In team mode this gives per-agent in-slot confirmation dialogs (TeamConfirmOverlay removed).
+  // In standalone mode: same behavior, single conversation.
   const listenConversationIds = useMemo(() => {
-    if (!teamPermission) return [conversation_id];
-    // Team mode: no local confirmation listening — TeamConfirmOverlay handles it
-    return [];
-  }, [teamPermission, conversation_id]);
+    return [conversation_id];
+  }, [conversation_id]);
 
   // Check if confirmation should be auto-confirmed via backend approval store
   // 通过后端 approval store 检查是否应该自动确认
@@ -217,17 +213,17 @@ const ConversationChatConfirm: React.FC<PropsWithChildren<{ conversation_id: str
       <div>
         {/* 错误提示卡片 / Error notification card */}
         <div
-          className={`relative p-16px bg-white flex flex-col overflow-hidden m-b-20px rd-20px max-w-800px w-full mx-auto box-border`}
+          className={`relative p-16px bg-dialog-fill-0 flex flex-col overflow-hidden m-b-20px rd-20px max-w-800px w-full mx-auto box-border`}
           style={{
             boxShadow: '0px 2px 20px 0px rgba(74, 88, 250, 0.1)',
           }}
         >
           {/* 错误标题 / Error title */}
-          <div className='color-[rgba(217,45,32,1)] text-14px font-medium mb-8px'>
+          <div className='color-[var(--danger)] text-14px font-medium mb-8px'>
             {t('conversation.chat.confirmationLoadError', 'Failed to load confirmation dialog')}
           </div>
           {/* 错误详情 / Error details */}
-          <div className='text-12px color-[rgba(134,144,156,1)] mb-12px'>{loadError}</div>
+          <div className='text-12px color-[var(--text-secondary)] mb-12px'>{loadError}</div>
           {/* 手动重试按钮 / Manual retry button */}
           <button
             onClick={() => {
@@ -263,17 +259,17 @@ const ConversationChatConfirm: React.FC<PropsWithChildren<{ conversation_id: str
     <>
       {hasConfirmation && confirmation && (
         <div
-          className={`relative p-16px bg-white flex flex-col overflow-hidden m-b-20px rd-20px max-w-800px max-h-[calc(100vh-200px)] w-full mx-auto box-border`}
+          className={`relative p-16px bg-dialog-fill-0 flex flex-col overflow-hidden m-b-20px rd-20px max-w-800px max-h-[calc(100vh-200px)] w-full mx-auto box-border`}
           style={{
             boxShadow: '0px 2px 20px 0px rgba(74, 88, 250, 0.1)',
           }}
         >
           <div className='flex-1 overflow-y-auto min-h-0'>
-            <Typography.Ellipsis className='text-16px font-bold color-[rgba(29,33,41,1)]' rows={2} expandable>
+            <Typography.Ellipsis className='text-16px font-bold color-[var(--text-primary)]' rows={2} expandable>
               {$t(confirmation.title) || 'Choose an action'}
             </Typography.Ellipsis>
             <Divider className={'!my-10px'}></Divider>
-            <Typography.Ellipsis className='text-14px color-[rgba(29,33,41,1)]' rows={5} expandable>
+            <Typography.Ellipsis className='text-14px color-[var(--text-primary)]' rows={5} expandable>
               {$t(confirmation.description)}
             </Typography.Ellipsis>
           </div>
@@ -305,9 +301,9 @@ const ConversationChatConfirm: React.FC<PropsWithChildren<{ conversation_id: str
                     });
                   }}
                   key={label + option.value + index}
-                  className='b-1px b-solid h-30px lh-30px b-[rgba(229,230,235,1)] rd-8px px-12px hover:bg-[rgba(229,231,240,1)] cursor-pointer mt-10px flex items-center gap-8px'
+                  className='b-1px b-solid h-30px lh-30px b-[var(--border-base)] rd-8px px-12px hover:bg-[var(--bg-hover)] cursor-pointer mt-10px flex items-center gap-8px color-[var(--text-primary)]'
                 >
-                  <span className='inline-flex items-center justify-center px-4px h-18px rd-4px bg-[rgba(229,230,235,0.6)] text-11px text-[rgba(134,144,156,1)] font-mono shrink-0'>
+                  <span className='inline-flex items-center justify-center px-4px h-18px rd-4px bg-[var(--bg-2)] text-11px text-[var(--text-secondary)] font-mono shrink-0'>
                     {shortcut}
                   </span>
                   {label}

@@ -13,8 +13,17 @@ import https from 'node:https';
 import http from 'node:http';
 import JSZip from 'jszip';
 import { ipcBridge } from '@/common';
-import { getSystemDir, getAssistantsDir, getSkillsDir, getBuiltinSkillsCopyDir } from '@process/utils/initStorage';
+import {
+  getSystemDir,
+  getAssistantsDir,
+  getSkillsDir,
+  getBuiltinSkillsCopyDir,
+  getAutoSkillsDir,
+  ProcessConfig,
+} from '@process/utils/initStorage';
 import { readDirectoryRecursive, shouldSkipWorkspaceEntry } from '@process/utils';
+import { getDatabase } from '@process/services/database';
+import { ExtensionRegistry } from '@process/extensions/ExtensionRegistry';
 import type { IWorkspaceFlatFile } from '@/common/adapter/ipcBridge';
 
 // ============================================================================
@@ -478,6 +487,81 @@ export function initFsBridge(): void {
       return tempFilePath;
     } catch (error) {
       console.error('Failed to create temp file:', error);
+      throw error;
+    }
+  });
+
+  // 创建上传文件 / Create upload file based on user preference
+  // 根据"上传文件保存到工作区"设置决定文件保存位置
+  ipcBridge.fs.createUploadFile.provider(async ({ fileName, conversationId }) => {
+    try {
+      // 检查用户偏好：保存到工作区还是缓存目录
+      // Check user preference: save to workspace or cache directory
+      const saveToWorkspace = await ProcessConfig.get('upload.saveToWorkspace').catch(() => false);
+
+      let uploadDir: string;
+      if (conversationId && saveToWorkspace) {
+        // 保存到工作区 / Save to workspace
+        try {
+          const db = await getDatabase();
+          const result = db.getConversation(conversationId);
+          const conversationWorkspace = result.data?.extra?.workspace;
+
+          if (!result.success || !conversationWorkspace) {
+            throw new Error('Conversation workspace not found');
+          }
+
+          const resolvedWorkspace = path.resolve(conversationWorkspace);
+          uploadDir = path.join(resolvedWorkspace, 'uploads');
+          await fs.mkdir(uploadDir, { recursive: true });
+        } catch (error) {
+          // 如果无法获取工作区，回退到缓存目录
+          // Fallback to cache directory if workspace cannot be resolved
+          console.warn('[fsBridge] Failed to resolve workspace, using cache directory:', error);
+          const { cacheDir } = getSystemDir();
+          const tempDir = path.join(cacheDir, 'temp');
+          await fs.mkdir(tempDir, { recursive: true });
+          uploadDir = tempDir;
+        }
+      } else {
+        // 保存到缓存目录 / Save to cache directory
+        const { cacheDir } = getSystemDir();
+        const tempDir = path.join(cacheDir, 'temp');
+        await fs.mkdir(tempDir, { recursive: true });
+        uploadDir = tempDir;
+      }
+
+      // 使用原文件名，必要时清理非法字符 / Keep original name but sanitize illegal characters
+      const safeFileName = fileName.replace(/[<>:"/\\|?*]/g, '_');
+      let filePath = path.join(uploadDir, safeFileName);
+
+      // 如果冲突则追加时间戳后缀 / Append timestamp when duplicate exists
+      const fileExists = await fs
+        .access(filePath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (fileExists) {
+        const timestamp = Date.now();
+        const ext = path.extname(safeFileName);
+        const name = path.basename(safeFileName, ext);
+        const newFileName = `${name}${AIONUI_TIMESTAMP_SEPARATOR}${timestamp}${ext}`;
+        filePath = path.join(uploadDir, newFileName);
+      }
+
+      // Defense in depth: ensure path stays within uploadDir
+      const resolvedFilePath = path.resolve(filePath);
+      const resolvedUploadDir = path.resolve(uploadDir);
+      if (!resolvedFilePath.startsWith(resolvedUploadDir + path.sep)) {
+        throw new Error('Invalid file name');
+      }
+
+      // 创建空文件作为占位 / Create empty placeholder file
+      await fs.writeFile(filePath, Buffer.alloc(0));
+
+      return filePath;
+    } catch (error) {
+      console.error('Failed to create upload file:', error);
       throw error;
     }
   });
@@ -948,18 +1032,20 @@ export function initFsBridge(): void {
     return deleteAssistantResource('skills', new RegExp(`^${assistantId}-skills\\..*\\.md$`));
   });
 
-  // 获取可用 skills 列表 / List available skills from both builtin and user directories
+  // 获取可用 skills 列表 / List available skills from builtin, user, and extension directories
   ipcBridge.fs.listAvailableSkills.provider(async () => {
     try {
-      const skills: Array<{
+      type SkillEntry = {
         name: string;
         description: string;
         location: string;
         isCustom: boolean;
-      }> = [];
+        source: 'builtin' | 'custom' | 'extension';
+      };
+      const skills: SkillEntry[] = [];
 
       // 辅助函数：从目录读取 skills
-      const readSkillsFromDir = async (skillsDir: string, isCustomDir: boolean) => {
+      const readSkillsFromDir = async (skillsDir: string, source: 'builtin' | 'custom') => {
         try {
           await fs.access(skillsDir);
           const entries = await fs.readdir(skillsDir, { withFileTypes: true });
@@ -986,7 +1072,8 @@ export function initFsBridge(): void {
                     name: nameMatch[1].trim(),
                     description: descMatch ? descMatch[1].trim() : '',
                     location: skillMdPath,
-                    isCustom: isCustomDir,
+                    isCustom: source === 'custom',
+                    source,
                   });
                 }
               }
@@ -999,33 +1086,96 @@ export function initFsBridge(): void {
         }
       };
 
-      // Read builtin skills from the dedicated builtin-skills/ directory (isCustom: false)
+      // Read builtin skills from the dedicated builtin-skills/ directory
       const builtinSkillsDir = getBuiltinSkillsCopyDir();
       const builtinCountBefore = skills.length;
-      await readSkillsFromDir(builtinSkillsDir, false);
+      await readSkillsFromDir(builtinSkillsDir, 'builtin');
       const builtinCount = skills.length - builtinCountBefore;
 
-      // 读取用户自定义 skills (isCustom: true)
+      // 读取用户自定义 skills
       const userSkillsDir = getSkillsDir();
       const userCountBefore = skills.length;
-      await readSkillsFromDir(userSkillsDir, true);
+      await readSkillsFromDir(userSkillsDir, 'custom');
       const userCount = skills.length - userCountBefore;
 
-      // Deduplicate: if a custom skill has the same name as a builtin, keep builtin
-      const skillMap = new Map<string, { name: string; description: string; location: string; isCustom: boolean }>();
+      // 读取扩展贡献的 skills / Read extension-contributed skills from ExtensionRegistry
+      let extensionCount = 0;
+      try {
+        const registry = ExtensionRegistry.getInstance();
+        const extSkills = registry.getSkills();
+        for (const extSkill of extSkills) {
+          skills.push({
+            name: extSkill.name,
+            description: extSkill.description,
+            location: extSkill.location,
+            isCustom: false,
+            source: 'extension',
+          });
+          extensionCount++;
+        }
+      } catch {
+        // ExtensionRegistry not available, skip
+      }
+
+      // Deduplicate: builtin > extension > custom (lower source wins on conflict)
+      const skillMap = new Map<string, SkillEntry>();
       for (const skill of skills) {
         const existing = skillMap.get(skill.name);
-        if (!existing || !skill.isCustom) {
+        if (!existing || (existing.source === 'custom' && skill.source !== 'custom')) {
           skillMap.set(skill.name, skill);
         }
       }
       const result = Array.from(skillMap.values());
 
-      console.log(`[fsBridge] Listed ${result.length} available skills: builtin=${builtinCount}, custom=${userCount}`);
+      console.log(
+        `[fsBridge] Listed ${result.length} available skills: builtin=${builtinCount}, custom=${userCount}, extension=${extensionCount}`
+      );
 
       return result;
     } catch (error) {
       console.error('[fsBridge] Failed to list available skills:', error);
+      return [];
+    }
+  });
+
+  // 获取内置自动注入 skills 列表 / List builtin auto-injected skills from _builtin directory
+  ipcBridge.fs.listBuiltinAutoSkills.provider(async () => {
+    try {
+      const autoSkillsDir = getAutoSkillsDir();
+      const skills: Array<{ name: string; description: string }> = [];
+
+      try {
+        await fs.access(autoSkillsDir);
+      } catch {
+        return skills;
+      }
+
+      const entries = await fs.readdir(autoSkillsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+
+        const skillMdPath = path.join(autoSkillsDir, entry.name, 'SKILL.md');
+        try {
+          const content = await fs.readFile(skillMdPath, 'utf-8');
+          const frontMatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+          if (frontMatterMatch) {
+            const yaml = frontMatterMatch[1];
+            const nameMatch = yaml.match(/^name:\s*(.+)$/m);
+            const descMatch = yaml.match(/^description:\s*['"]?(.+?)['"]?$/m);
+            skills.push({
+              name: nameMatch ? nameMatch[1].trim() : entry.name,
+              description: descMatch ? descMatch[1].trim() : '',
+            });
+          }
+        } catch {
+          // SKILL.md not found or unreadable, skip
+        }
+      }
+
+      console.log(`[fsBridge] Listed ${skills.length} builtin auto-injected skills`);
+      return skills;
+    } catch (error) {
+      console.error('[fsBridge] Failed to list builtin auto skills:', error);
       return [];
     }
   });
@@ -1336,7 +1486,6 @@ export function initFsBridge(): void {
   ipcBridge.fs.detectAndCountExternalSkills.provider(async () => {
     try {
       const homedir = os.homedir();
-      const userSkillsDir = getSkillsDir();
       const builtinCandidates = [
         {
           name: 'Global Agents',

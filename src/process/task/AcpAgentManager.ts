@@ -1,4 +1,5 @@
-import { AcpAgent } from '@process/agent/acp';
+import type { AcpAgent } from '@process/agent/acp';
+import { AcpAgentV2 } from '@process/acp/compat';
 import { channelEventBus } from '@process/channels/agent/ChannelEventBus';
 import { teamEventBus } from '@process/team/teamEventBus';
 import { ipcBridge } from '@/common';
@@ -21,7 +22,6 @@ import type {
 } from '@/common/types/acpTypes';
 import { ACP_BACKENDS_ALL } from '@/common/types/acpTypes';
 import { ExtensionRegistry } from '@process/extensions';
-import { parseCompletionSource, turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
 import { getDatabase } from '@process/services/database';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { addMessage, addOrUpdateMessage, nextTickToLocalFinish } from '@process/utils/message';
@@ -41,9 +41,10 @@ import { extractAndStripThinkTags } from './ThinkTagDetector';
 import type { AgentKillReason } from './IAgentManager';
 import { hasNativeSkillSupport } from '@/common/types/acpTypes';
 import { prepareFirstMessageWithSkillsIndex } from '@process/task/agentUtils';
-import { shouldInjectTeamGuideMcp } from '@process/resources/prompts/teamGuidePrompt';
+import { shouldInjectTeamGuideMcp } from '@process/team/prompts/teamGuideCapability.ts';
 import { extractTextFromMessage, processCronInMessage } from './MessageMiddleware';
 import { ConversationTurnCompletionService } from './ConversationTurnCompletionService';
+import { parseCompletionSource, turnSnapshotCoordinator } from '@process/bridge/services/TurnSnapshotCoordinator';
 
 interface AcpAgentManagerData {
   workspace?: string;
@@ -52,11 +53,15 @@ interface AcpAgentManagerData {
   customWorkspace?: boolean;
   conversation_id: string;
   customAgentId?: string; // 用于标识特定自定义代理的 UUID / UUID for identifying specific custom agent
+  /** Preset assistant id (builtin or custom) shown in the conversation header / 预设助手 ID */
+  presetAssistantId?: string;
   /** Display name for the agent (from extension or custom config) / Agent 显示名称（来自扩展或自定义配置） */
   agentName?: string;
   presetContext?: string; // 智能助手的预设规则/提示词 / Preset context from smart assistant
   /** 启用的 skills 列表，用于过滤 SkillManager 加载的 skills / Enabled skills list for filtering SkillManager skills */
   enabledSkills?: string[];
+  /** 排除的内置自动注入 skills / Builtin auto-injected skills to exclude */
+  excludeBuiltinSkills?: string[];
   /** Force yolo mode (auto-approve) - used by CronService for scheduled tasks */
   yoloMode?: boolean;
   /** ACP session ID for resume support / ACP session ID 用于会话恢复 */
@@ -83,8 +88,8 @@ type CustomAgentLaunchConfig = Pick<AcpBackendConfig, 'id' | 'name' | 'defaultCl
 
 class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissionOption> {
   workspace: string;
-  agent: AcpAgent;
-  private bootstrap: Promise<AcpAgent> | undefined;
+  agent: AcpAgentV2;
+  private bootstrap: Promise<AcpAgentV2> | undefined;
   private bootstrapping: boolean = false;
   private isFirstMessage: boolean = true;
   options: AcpAgentManagerData;
@@ -113,7 +118,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
   private readonly missingFinishFallbackDelayMs = 15000;
 
   constructor(data: AcpAgentManagerData) {
-    super('acp', data, new IpcAgentEventEmitter());
+    super('acp', data, new IpcAgentEventEmitter(), false);
     this.conversation_id = data.conversation_id;
     this.workspace = data.workspace;
     this.options = data;
@@ -296,6 +301,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
     }
     this.clearMissingFinishFallback();
     this.flushBufferedStreamTextMessages();
+    let shouldCompleteTurn = true;
 
     cronBusyGuard.setProcessing(this.conversation_id, false);
     this.status = 'finished';
@@ -332,6 +338,7 @@ class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissio
         ipcBridge.acpConversation.responseStream.emit(systemMessage);
       });
       if (collectedResponses.length > 0 && this.agent) {
+        shouldCompleteTurn = false;
         const feedbackMessage = `[System Response]
 ${collectedResponses.join('\n')}`;
         await this.agent.sendMessage({ content: feedbackMessage });
@@ -348,6 +355,14 @@ ${collectedResponses.join('\n')}`;
     ipcBridge.acpConversation.responseStream.emit(finishMessage);
     teamEventBus.emit('responseStream', finishMessage);
     channelEventBus.emitAgentMessage(this.conversation_id, finishMessage);
+
+    if (shouldCompleteTurn) {
+      void turnSnapshotCoordinator.completeTurn({
+        conversationId: this.conversation_id,
+        completionSignal: finishMessage.type,
+        completionSource: parseCompletionSource(message.data),
+      });
+    }
 
     void ConversationTurnCompletionService.getInstance().notifyPotentialCompletion(this.conversation_id, {
       status: this.status ?? 'finished',
@@ -436,27 +451,22 @@ ${collectedResponses.join('\n')}`;
     customEnv?: Record<string, string>;
     yoloMode?: boolean;
   }> {
-    if (data.backend === 'custom' && data.customAgentId) {
+    if (data.customAgentId) {
       return this.resolveCustomAgentCliConfig(data);
     }
-    if (data.backend !== 'custom') {
-      return this.resolveBuiltinBackendConfig(data);
-    }
-    // backend === 'custom' but no customAgentId - invalid state
-    mainWarn('[AcpAgentManager]', 'Custom backend specified but customAgentId is missing');
-    return { cliPath: data.cliPath };
+    return this.resolveBuiltinBackendConfig(data);
   }
 
   /**
    * Resolve CLI config for a custom agent backend.
-   * Looks up acp.customAgents by UUID, falling back to extension-contributed adapters.
+   * Looks up assistants config by UUID, falling back to extension-contributed adapters.
    */
   private async resolveCustomAgentCliConfig(data: AcpAgentManagerData): Promise<{
     cliPath?: string;
     customArgs?: string[];
     customEnv?: Record<string, string>;
   }> {
-    const customAgents = await ProcessConfig.get('acp.customAgents');
+    const customAgents = await ProcessConfig.get('assistants');
     let customAgentConfig: CustomAgentLaunchConfig | undefined = customAgents?.find(
       (agent) => agent.id === data.customAgentId
     );
@@ -523,7 +533,6 @@ ${collectedResponses.join('\n')}`;
       const yoloModeValues: Record<string, string> = {
         claude: 'bypassPermissions',
         qwen: 'yolo',
-        iflow: 'yolo',
         codex: 'yolo',
       };
       this.currentMode = yoloModeValues[data.backend] || 'yolo';
@@ -863,10 +872,8 @@ ${collectedResponses.join('\n')}`;
       }
     }
 
-    const modelInfo = this.agent.getModelInfo();
-    if (modelInfo && modelInfo.availableModels?.length > 0) {
-      void this.cacheModelList(modelInfo);
-    }
+    // Note: model list caching is now handled by AcpAgent.cacheSessionCapabilities()
+    // during start(), so we don't need to call cacheModelList() here.
   }
 
   // ── initAgent ────────────────────────────────────────────────────────
@@ -878,7 +885,7 @@ ${collectedResponses.join('\n')}`;
     this.bootstrap = (async () => {
       const { cliPath, customArgs, customEnv, yoloMode } = await this.resolveAgentCliConfig(data);
 
-      this.agent = new AcpAgent({
+      const agentConfig = {
         id: data.conversation_id,
         backend: data.backend,
         cliPath: cliPath,
@@ -912,142 +919,15 @@ ${collectedResponses.join('\n')}`;
         onAvailableCommandsUpdate: (commands: Array<{ name: string; description?: string; hint?: string }>) => {
           this.handleAvailableCommandsUpdate(commands);
         },
-        onStreamEvent: (message) => {
+        onStreamEvent: (message: IResponseMessage) => {
           this.handleStreamEvent(message as IResponseMessage, data.backend);
         },
-        onSignalEvent: async (v) => {
-          // Signal events (permission, finish, etc.) count as activity
-          this._lastActivityAt = Date.now();
-
-          // Flush buffered text chunks before handling turn-level signals
-          this.flushBufferedStreamTextMessages();
-          let shouldCompleteTurn = v.type === 'finish';
-          const completionSource = parseCompletionSource(v.data);
-
-          // 仅发送信号到前端，不更新消息列表
-          if (v.type === 'acp_permission') {
-            const { toolCall, options } = v.data as AcpPermissionRequest;
-
-            // Auto-approve ALL tools when in yolo/bypassPermissions mode.
-            // Fallback for cases where this.yoloMode wasn't set correctly
-            // (e.g., setMode IPC failed silently for spawned agents).
-            if (this.isYoloMode(this.currentMode) && options.length > 0) {
-              const autoOption = options[0];
-              setTimeout(() => {
-                void this.confirm(v.msg_id, toolCall.toolCallId || v.msg_id, autoOption);
-              }, 50);
-              return;
-            }
-
-            // Auto-approve team MCP tools — they are internal tools provided by AionUi,
-            // not external MCP servers, so they should never require user confirmation.
-            const toolTitle = toolCall.title || '';
-            if (toolTitle.includes('aionui-team') && options.length > 0) {
-              const autoOption = options[0];
-              setTimeout(() => {
-                void this.confirm(v.msg_id, toolCall.toolCallId || v.msg_id, autoOption);
-              }, 50);
-              return;
-            }
-
-            this.addConfirmation({
-              title: toolCall.title || 'messages.permissionRequest',
-              action: 'messages.command',
-              id: v.msg_id,
-              description: toolCall.rawInput?.description || 'messages.agentRequestingPermission',
-              callId: toolCall.toolCallId || v.msg_id,
-              options: options.map((option) => ({
-                label: option.name,
-                value: option,
-              })),
-            });
-
-            // Channels (Telegram/Lark) currently don't have interactive permission UX.
-            // Emit a readable error to avoid "silent hang" in external platforms.
-            channelEventBus.emitAgentMessage(this.conversation_id, {
-              type: 'error',
-              conversation_id: this.conversation_id,
-              msg_id: v.msg_id,
-              data: 'Permission required. Please open AionUi and confirm the pending request in the conversation panel.',
-            });
-            return;
-          }
-
-          // Clear busy guard and finalize thinking message when turn ends
-          if (v.type === 'finish') {
-            cronBusyGuard.setProcessing(this.conversation_id, false);
-            this.status = 'finished';
-            // Finalize thinking message with done status
-            if (this.thinkingMsgId) {
-              this.emitThinkingMessage('', 'done');
-              this.thinkingMsgId = null;
-              this.thinkingStartTime = null;
-              this.thinkingContent = '';
-            }
-            // Check for SKILL_SUGGEST.md updates (registered by cron executor)
-            skillSuggestWatcher.onFinish(this.conversation_id);
-          }
-
-          // Process cron commands when turn ends (finish signal)
-          // ACP streams content in chunks, so we check the accumulated content here
-          if (v.type === 'finish' && this.currentMsgContent && hasCronCommands(this.currentMsgContent)) {
-            const message: TMessage = {
-              id: this.currentMsgId || uuid(),
-              msg_id: this.currentMsgId || uuid(),
-              type: 'text',
-              position: 'left',
-              conversation_id: this.conversation_id,
-              content: { content: this.currentMsgContent },
-              status: 'finish',
-              createdAt: Date.now(),
-            };
-            // Process cron commands and send results back to AI
-            const collectedResponses: string[] = [];
-            await processCronInMessage(this.conversation_id, data.backend as any, message, (sysMsg) => {
-              collectedResponses.push(sysMsg);
-              // Also emit to frontend for display
-              const systemMessage: IResponseMessage = {
-                type: 'system',
-                conversation_id: this.conversation_id,
-                msg_id: uuid(),
-                data: sysMsg,
-              };
-              ipcBridge.acpConversation.responseStream.emit(systemMessage);
-            });
-            // Send collected responses back to AI agent so it can continue
-            if (collectedResponses.length > 0 && this.agent) {
-              shouldCompleteTurn = false;
-              const feedbackMessage = `[System Response]\n${collectedResponses.join('\n')}`;
-              await this.agent.sendMessage({ content: feedbackMessage });
-            }
-            // Reset after processing
-            this.currentMsgId = null;
-            this.currentMsgContent = '';
-          }
-
-          ipcBridge.acpConversation.responseStream.emit(v);
-          // Also emit to main-process-local bus (same reason as onStreamEvent above)
-          teamEventBus.emit('responseStream', {
-            ...(v as IResponseMessage),
-            conversation_id: this.conversation_id,
-          });
-
-          // Forward signals (finish/error/etc.) to Channel global event bus
-          channelEventBus.emitAgentMessage(this.conversation_id, {
-            ...(v as any),
-            conversation_id: this.conversation_id,
-          });
-
-          if (shouldCompleteTurn) {
-            void turnSnapshotCoordinator.completeTurn({
-              conversationId: this.conversation_id,
-              completionSignal: v.type,
-              completionSource,
-            });
-          }
+        onSignalEvent: async (v: IResponseMessage) => {
           await this.handleSignalEvent(v as IResponseMessage, data.backend);
         },
-      });
+      };
+
+      this.agent = new AcpAgentV2(agentConfig);
       return this.agent.start().then(async () => {
         await this.restorePersistedState();
         this.bootstrapping = false;
@@ -1137,21 +1017,32 @@ ${collectedResponses.join('\n')}`;
             // Native skill discovery via workspace symlinks — inject preset rules + team guide
             const parts: string[] = [];
             if (this.options.presetContext) parts.push(this.options.presetContext);
-            if (!isInTeam && shouldInjectTeamGuideMcp(this.options.backend)) {
-              const { getTeamGuidePrompt } = await import('@process/resources/prompts/teamGuidePrompt');
-              parts.push(getTeamGuidePrompt(this.options.backend));
+            if (!isInTeam && (await shouldInjectTeamGuideMcp(this.options.backend))) {
+              const [{ getTeamGuidePrompt }, { resolveLeaderAssistantLabel }] = await Promise.all([
+                import('@process/team/prompts/teamGuidePrompt.ts'),
+                import('@process/team/prompts/teamGuideAssistant.ts'),
+              ]);
+              const leaderLabel = await resolveLeaderAssistantLabel(
+                this.options.presetAssistantId || this.options.customAgentId
+              );
+              parts.push(getTeamGuidePrompt({ backend: this.options.backend, leaderLabel }));
             }
             if (parts.length > 0) {
-              contentToSend = `[Assistant Rules - You MUST follow these instructions]\n${parts.join('\n\n')}\n\n[User Request]\n${contentToSend}`;
+              contentToSend = `[Assistant Rules - You MUST follow these instructions]\n${parts.join(
+                '\n\n'
+              )}\n\n[User Request]\n${contentToSend}`;
             }
           } else {
             // Custom workspace or no native support — inject rules + skills via prompt
-            contentToSend = await prepareFirstMessageWithSkillsIndex(contentToSend, {
+            const { content: injectedContent } = await prepareFirstMessageWithSkillsIndex(contentToSend, {
               presetContext: this.options.presetContext,
               enabledSkills: this.options.enabledSkills,
-              enableTeamGuide: !isInTeam && shouldInjectTeamGuideMcp(this.options.backend),
+              excludeBuiltinSkills: this.options.excludeBuiltinSkills,
+              enableTeamGuide: !isInTeam && (await shouldInjectTeamGuideMcp(this.options.backend)),
               backend: this.options.backend,
+              presetAssistantId: this.options.presetAssistantId || this.options.customAgentId,
             });
+            contentToSend = injectedContent;
           }
         }
 
@@ -1176,7 +1067,9 @@ ${collectedResponses.join('\n')}`;
       const agentSendStart = Date.now();
       const result = await this.sendAgentMessageWithFinishFallback(data);
       console.log(
-        `[ACP-PERF] manager: agent.sendMessage completed ${Date.now() - agentSendStart}ms (total manager.sendMessage: ${Date.now() - managerSendStart}ms)`
+        `[ACP-PERF] manager: agent.sendMessage completed ${Date.now() - agentSendStart}ms (total manager.sendMessage: ${
+          Date.now() - managerSendStart
+        }ms)`
       );
       if (!result.success) {
         this.clearBusyState();
@@ -1389,6 +1282,7 @@ ${collectedResponses.join('\n')}`;
       if (this.persistedModelId) {
         return {
           source: 'models',
+          sourceDetail: 'persisted-model',
           currentModelId: this.persistedModelId,
           currentModelLabel: this.persistedModelId,
           canSwitch: false,
@@ -1475,6 +1369,20 @@ ${collectedResponses.join('\n')}`;
       const sandboxMode = getCodexSandboxModeForSessionMode(mode, this.options.sandboxMode);
       this.options.sandboxMode = sandboxMode;
       await writeCodexSandboxMode(sandboxMode);
+      this.saveSessionMode(mode);
+
+      if (this.isYoloMode(prev) && !this.isYoloMode(mode)) {
+        void this.clearLegacyYoloConfig();
+      }
+      return { success: true, data: { mode: this.currentMode } };
+    }
+
+    // Snow CLI does not support ACP session/set_mode — it returns "Method not found".
+    // Like Codex, manage mode at the Manager layer only.
+    if (this.options.backend === 'snow') {
+      const prev = this.currentMode;
+      this.currentMode = mode;
+      this.yoloMode = this.isYoloMode(mode);
       this.saveSessionMode(mode);
 
       if (this.isYoloMode(prev) && !this.isYoloMode(mode)) {

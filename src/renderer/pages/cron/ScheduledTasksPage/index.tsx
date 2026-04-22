@@ -14,7 +14,7 @@ import { useLayoutContext } from '@renderer/hooks/context/LayoutContext';
 import { useAllCronJobs } from '@renderer/pages/cron/useCronJobs';
 import { formatSchedule, formatNextRun } from '@renderer/pages/cron/cronUtils';
 import { systemSettings, type ICronJob } from '@/common/adapter/ipcBridge';
-import { ACP_BACKENDS_ALL, type AcpBackendAll } from '@/common/types/acpTypes';
+import { ACP_BACKENDS_ALL, type AcpBackendAll, type AcpBackendConfig } from '@/common/types/acpTypes';
 import { getAgentLogo } from '@renderer/utils/model/agentLogo';
 import CronStatusTag from './CronStatusTag';
 import CreateTaskDialog from './CreateTaskDialog';
@@ -29,7 +29,10 @@ function getJobAgentMeta(job: ICronJob): { name?: string; logo?: string | null }
   if (!backend) return {};
 
   return {
-    name: job.metadata.agentConfig?.name || ACP_BACKENDS_ALL[backend]?.name || backend,
+    name:
+      job.metadata.agentConfig?.name ||
+      (ACP_BACKENDS_ALL as Record<string, AcpBackendConfig>)[backend]?.name ||
+      backend,
     logo: getAgentLogo(backend),
   };
 }
@@ -92,7 +95,7 @@ const ScheduledTasksPage: React.FC = () => {
     >
       <div
         className={classNames(
-          'mx-auto flex w-full max-w-760px box-border flex-col',
+          'mx-auto flex w-full max-w-800px box-border flex-col',
           isMobile ? 'gap-14px' : 'gap-16px'
         )}
       >

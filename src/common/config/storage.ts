@@ -61,11 +61,18 @@ export interface IConfigStorageRefer {
   'acp.promptTimeout'?: number;
   /** Idle timeout in minutes before an ACP agent process is killed to reclaim memory (default: 5). */
   'acp.agentIdleTimeout'?: number;
+  /** User-defined custom ACP agents (isPreset !== true, require defaultCliPath). */
   'acp.customAgents'?: AcpBackendConfig[];
+  /** Preset assistant configurations (isPreset === true, prompt-only, no CLI). */
+  assistants?: AcpBackendConfig[];
+  // Cached initialize results per ACP backend (persisted across sessions)
+  'acp.cachedInitializeResult'?: Record<string, import('@/common/types/acpTypes').AcpInitializeResult>;
   // Cached model lists per ACP backend for Guid page pre-selection
   'acp.cachedModels'?: Record<string, import('@/common/types/acpTypes').AcpModelInfo>;
   // Cached config options per ACP backend for Guid page pre-selection
   'acp.cachedConfigOptions'?: Record<string, import('@/common/types/acpTypes').AcpSessionConfigOption[]>;
+  // Cached modes per ACP backend for Guid page / AgentModeSelector
+  'acp.cachedModes'?: Record<string, import('@/common/types/acpTypes').AcpSessionModes>;
   'model.config': IProvider[];
   'mcp.config': IMcpServer[];
   'mcp.agentInstallStatus': Record<string, string[]>;
@@ -84,6 +91,11 @@ export interface IConfigStorageRefer {
   'css.themes': ICssTheme[]; // 自定义 CSS 主题列表 / Custom CSS themes list
   'css.activeThemeId': string; // 当前激活的主题 ID / Currently active theme ID
   'gemini.defaultModel': string | { id: string; useModel: string };
+  'aionrs.config'?: {
+    /** Preferred session mode for new conversations / 新会话的默认模式 */
+    preferredMode?: string;
+  };
+  'aionrs.defaultModel'?: { id: string; useModel: string };
   'tools.imageGenerationModel': TProviderWithModel & {
     /** @deprecated Image generation is now controlled via built-in MCP server toggle */
     switch?: boolean;
@@ -104,6 +116,8 @@ export interface IConfigStorageRefer {
   'migration.builtinDefaultSkillsAdded_v2'?: boolean;
   // 迁移标记：为所有内置助手添加 promptsI18n / Migration flag: add promptsI18n for all builtin assistants
   'migration.promptsI18nAdded'?: boolean;
+  /** Migration flag: split 'assistants' into presets-only + 'acp.customAgents' (user-defined customs). */
+  'migration.assistantsSplitCustom'?: boolean;
   /** Migration flag: Electron desktop config has been imported to server config */
   'migration.electronConfigImported'?: boolean;
   // 关闭窗口时最小化到系统托盘 / Minimize to system tray when closing window
@@ -114,8 +128,6 @@ export interface IConfigStorageRefer {
   'system.cronNotificationEnabled'?: boolean;
   // 阻止系统休眠以保证定时任务执行 / Prevent system sleep to ensure scheduled tasks run
   'system.keepAwake'?: boolean;
-  // Whether conversation command queue is enabled
-  'system.commandQueueEnabled'?: boolean;
   // Automatically preview newly created Office files in the current workspace
   'system.autoPreviewOfficeFiles'?: boolean;
   // Telegram assistant default model / Telegram 助手默认模型
@@ -125,7 +137,7 @@ export interface IConfigStorageRefer {
   };
   // Telegram assistant agent selection / Telegram 助手所使用的 Agent
   'assistant.telegram.agent'?: {
-    backend: AcpBackendAll;
+    backend: string;
     customAgentId?: string;
     name?: string;
   };
@@ -136,7 +148,7 @@ export interface IConfigStorageRefer {
   };
   // Lark assistant agent selection / Lark 助手所使用的 Agent
   'assistant.lark.agent'?: {
-    backend: AcpBackendAll;
+    backend: string;
     customAgentId?: string;
     name?: string;
   };
@@ -147,7 +159,7 @@ export interface IConfigStorageRefer {
   };
   // DingTalk assistant agent selection / DingTalk 助手所使用的 Agent
   'assistant.dingtalk.agent'?: {
-    backend: AcpBackendAll;
+    backend: string;
     customAgentId?: string;
     name?: string;
   };
@@ -158,7 +170,7 @@ export interface IConfigStorageRefer {
   };
   // WeChat assistant agent selection / WeChat 助手所使用的 Agent
   'assistant.weixin.agent'?: {
-    backend: AcpBackendAll;
+    backend: string;
     customAgentId?: string;
     name?: string;
   };
@@ -169,7 +181,7 @@ export interface IConfigStorageRefer {
   };
   // WeCom assistant agent selection / 企业微信助手所使用的 Agent
   'assistant.wecom.agent'?: {
-    backend: AcpBackendAll;
+    backend: string;
     customAgentId?: string;
     name?: string;
   };
@@ -234,6 +246,8 @@ export type TChatConversation =
         presetRules?: string; // 系统规则，在初始化时注入 / System rules, injected at initialization
         /** 启用的 skills 列表，用于过滤 SkillManager 加载的 skills / Enabled skills list for filtering SkillManager skills */
         enabledSkills?: string[];
+        /** 实际加载的 skills 快照（首次消息时持久化）/ Snapshot of actually loaded skills (persisted on first message) */
+        loadedSkills?: Array<{ name: string; description: string }>;
         /** 预设助手 ID，用于在会话面板显示助手名称和头像 / Preset assistant ID for displaying name and avatar in conversation panel */
         presetAssistantId?: string;
         /** 是否置顶会话 / Whether this conversation is pinned */
@@ -261,6 +275,10 @@ export type TChatConversation =
           presetContext?: string; // 智能助手的预设规则/提示词 / Preset context from smart assistant
           /** 启用的 skills 列表，用于过滤 SkillManager 加载的 skills / Enabled skills list for filtering SkillManager skills */
           enabledSkills?: string[];
+          /** 排除的内置自动注入 skills / Builtin auto-injected skills to exclude */
+          excludeBuiltinSkills?: string[];
+          /** 实际加载的 skills 快照 / Snapshot of actually loaded skills */
+          loadedSkills?: Array<{ name: string; description: string }>;
           /** 预设助手 ID，用于在会话面板显示助手名称和头像 / Preset assistant ID for displaying name and avatar in conversation panel */
           presetAssistantId?: string;
           /** 是否置顶会话 / Whether this conversation is pinned */
@@ -304,6 +322,8 @@ export type TChatConversation =
           presetContext?: string; // 智能助手的预设规则/提示词 / Preset context from smart assistant
           /** 启用的 skills 列表，用于过滤 SkillManager 加载的 skills / Enabled skills list for filtering SkillManager skills */
           enabledSkills?: string[];
+          /** 实际加载的 skills 快照 / Snapshot of actually loaded skills */
+          loadedSkills?: Array<{ name: string; description: string }>;
           /** 预设助手 ID，用于在会话面板显示助手名称和头像 / Preset assistant ID for displaying name and avatar in conversation panel */
           presetAssistantId?: string;
           /** 是否置顶会话 / Whether this conversation is pinned */
@@ -353,6 +373,8 @@ export type TChatConversation =
           };
           /** 启用的 skills 列表 / Enabled skills list */
           enabledSkills?: string[];
+          /** 实际加载的 skills 快照 / Snapshot of actually loaded skills */
+          loadedSkills?: Array<{ name: string; description: string }>;
           /** 预设助手 ID / Preset assistant ID */
           presetAssistantId?: string;
           /** 是否置顶会话 / Whether this conversation is pinned */
@@ -375,6 +397,8 @@ export type TChatConversation =
           customWorkspace?: boolean;
           /** 启用的 skills 列表 / Enabled skills list */
           enabledSkills?: string[];
+          /** 实际加载的 skills 快照 / Snapshot of actually loaded skills */
+          loadedSkills?: Array<{ name: string; description: string }>;
           /** 预设助手 ID / Preset assistant ID */
           presetAssistantId?: string;
           /** 是否置顶会话 / Whether this conversation is pinned */
@@ -401,6 +425,8 @@ export type TChatConversation =
           sessionKey?: string;
           /** Enabled skills list */
           enabledSkills?: string[];
+          /** Snapshot of actually loaded skills */
+          loadedSkills?: Array<{ name: string; description: string }>;
           /** Preset assistant ID */
           presetAssistantId?: string;
           /** Whether this conversation is pinned */
@@ -425,6 +451,8 @@ export type TChatConversation =
         presetRules?: string;
         /** Enabled skills list */
         enabledSkills?: string[];
+        /** Snapshot of actually loaded skills */
+        loadedSkills?: Array<{ name: string; description: string }>;
         /** Preset assistant ID */
         presetAssistantId?: string;
         /** Whether this conversation is pinned */

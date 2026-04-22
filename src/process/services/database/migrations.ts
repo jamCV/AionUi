@@ -1116,55 +1116,97 @@ const migration_v22: IMigration = {
   },
 };
 
+function ensureTeamSessionModeColumn(db: ISqliteDriver): void {
+  const teamColumns = new Set((db.pragma('table_info(teams)') as Array<{ name: string }>).map((column) => column.name));
+  if (!teamColumns.has('session_mode')) {
+    db.exec('ALTER TABLE teams ADD COLUMN session_mode TEXT');
+  }
+}
+
+function ensureTurnSnapshotTables(db: ISqliteDriver): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS conversation_turns (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    request_msg_id TEXT,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER NOT NULL,
+    completion_signal TEXT NOT NULL,
+    completion_source TEXT,
+    review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
+    file_count INTEGER NOT NULL DEFAULT 0,
+    source_message_ids TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS conversation_turn_files (
+    id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
+    before_exists INTEGER NOT NULL,
+    after_exists INTEGER NOT NULL,
+    before_hash TEXT,
+    after_hash TEXT,
+    before_content TEXT,
+    after_content TEXT,
+    unified_diff TEXT NOT NULL,
+    source_message_ids TEXT NOT NULL,
+    revert_supported INTEGER NOT NULL DEFAULT 1,
+    revert_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (turn_id) REFERENCES conversation_turns(id) ON DELETE CASCADE,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, completed_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_turn_files_conversation_path ON conversation_turn_files(conversation_id, file_path)'
+  );
+}
+
+function ensureCronJobDescriptionColumn(db: ISqliteDriver): void {
+  const cronColumns = new Set((db.pragma('table_info(cron_jobs)') as Array<{ name: string }>).map((column) => column.name));
+  if (!cronColumns.has('description')) {
+    db.exec('ALTER TABLE cron_jobs ADD COLUMN description TEXT');
+  }
+}
+
+function ensureMailboxFilesColumn(db: ISqliteDriver): void {
+  const mailboxColumns = new Set((db.pragma('table_info(mailbox)') as Array<{ name: string }>).map((column) => column.name));
+  if (!mailboxColumns.has('files')) {
+    db.exec('ALTER TABLE mailbox ADD COLUMN files TEXT');
+  }
+}
+
+function ensureAcpSessionTable(db: ISqliteDriver): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS acp_session (
+    conversation_id TEXT PRIMARY KEY,
+    agent_backend TEXT NOT NULL,
+    agent_source TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT,
+    session_status TEXT NOT NULL DEFAULT 'idle',
+    session_config TEXT NOT NULL DEFAULT '{}',
+    last_active_at INTEGER,
+    suspended_at INTEGER
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_acp_session_status ON acp_session(session_status)');
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_acp_session_suspended ON acp_session(session_status, suspended_at) WHERE session_status = 'suspended'"
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_acp_session_agent_id ON acp_session(agent_id)');
+}
+
 const migration_v23: IMigration = {
   version: 23,
   name: 'Add conversation turn snapshot tables',
   up: (db) => {
-    db.exec(`CREATE TABLE IF NOT EXISTS conversation_turns (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      backend TEXT NOT NULL,
-      request_msg_id TEXT,
-      started_at INTEGER NOT NULL,
-      completed_at INTEGER NOT NULL,
-      completion_signal TEXT NOT NULL,
-      completion_source TEXT,
-      review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
-      file_count INTEGER NOT NULL DEFAULT 0,
-      source_message_ids TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-    )`);
-    db.exec(`CREATE TABLE IF NOT EXISTS conversation_turn_files (
-      id TEXT PRIMARY KEY,
-      turn_id TEXT NOT NULL,
-      conversation_id TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
-      before_exists INTEGER NOT NULL,
-      after_exists INTEGER NOT NULL,
-      before_hash TEXT,
-      after_hash TEXT,
-      before_content TEXT,
-      after_content TEXT,
-      unified_diff TEXT NOT NULL,
-      source_message_ids TEXT NOT NULL,
-      revert_supported INTEGER NOT NULL DEFAULT 1,
-      revert_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (turn_id) REFERENCES conversation_turns(id) ON DELETE CASCADE,
-      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-    )`);
-    db.exec(
-      'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, completed_at DESC)'
-    );
-    db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
-    db.exec(
-      'CREATE INDEX IF NOT EXISTS idx_turn_files_conversation_path ON conversation_turn_files(conversation_id, file_path)'
-    );
+    ensureTurnSnapshotTables(db);
     console.log('[Migration v23] Added turn snapshot tables');
   },
   down: (db) => {
@@ -1187,63 +1229,68 @@ const migration_v24: IMigration = {
   version: 24,
   name: 'Reconcile v23 schema split',
   up: (db) => {
-    const teamColumns = new Set((db.pragma('table_info(teams)') as Array<{ name: string }>).map((c) => c.name));
-    if (!teamColumns.has('session_mode')) {
-      db.exec('ALTER TABLE teams ADD COLUMN session_mode TEXT');
-    }
-
-    db.exec(`CREATE TABLE IF NOT EXISTS conversation_turns (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      backend TEXT NOT NULL,
-      request_msg_id TEXT,
-      started_at INTEGER NOT NULL,
-      completed_at INTEGER NOT NULL,
-      completion_signal TEXT NOT NULL,
-      completion_source TEXT,
-      review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'kept', 'reverted', 'conflict', 'unsupported', 'failed')),
-      file_count INTEGER NOT NULL DEFAULT 0,
-      source_message_ids TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-    )`);
-    db.exec(`CREATE TABLE IF NOT EXISTS conversation_turn_files (
-      id TEXT PRIMARY KEY,
-      turn_id TEXT NOT NULL,
-      conversation_id TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
-      before_exists INTEGER NOT NULL,
-      after_exists INTEGER NOT NULL,
-      before_hash TEXT,
-      after_hash TEXT,
-      before_content TEXT,
-      after_content TEXT,
-      unified_diff TEXT NOT NULL,
-      source_message_ids TEXT NOT NULL,
-      revert_supported INTEGER NOT NULL DEFAULT 1,
-      revert_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (turn_id) REFERENCES conversation_turns(id) ON DELETE CASCADE,
-      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-    )`);
-    db.exec(
-      'CREATE INDEX IF NOT EXISTS idx_turns_conversation_completed ON conversation_turns(conversation_id, completed_at DESC)'
-    );
-    db.exec('CREATE INDEX IF NOT EXISTS idx_turn_files_turn_id ON conversation_turn_files(turn_id)');
-    db.exec(
-      'CREATE INDEX IF NOT EXISTS idx_turn_files_conversation_path ON conversation_turn_files(conversation_id, file_path)'
-    );
-
+    ensureTeamSessionModeColumn(db);
+    ensureTurnSnapshotTables(db);
     console.log('[Migration v24] Reconciled split v23 schema additions');
   },
   down: (_db) => {
     // This migration only reconciles divergent local version histories.
     // Rolling it back safely would require knowing which branch lineage the DB came from.
     console.warn('[Migration v24] Rollback skipped: reconciliation migration is intentionally one-way.');
+  },
+};
+
+/**
+ * Migration v24 -> v25: Add description to cron_jobs table
+ */
+const migration_v25: IMigration = {
+  version: 25,
+  name: 'Add description to cron_jobs table',
+  up: (db) => {
+    ensureCronJobDescriptionColumn(db);
+    console.log('[Migration v25] Added description column to cron_jobs table');
+  },
+  down: (_db) => {
+    // SQLite does not support DROP COLUMN before 3.35.0; skip rollback to prevent data loss.
+    console.warn('[Migration v25] Rollback skipped: cannot drop columns safely.');
+  },
+};
+
+/**
+ * Migration v25 -> v26: Add files column to mailbox table
+ * Stores JSON-serialized file paths so team mode can forward attachments to agents.
+ */
+const migration_v26: IMigration = {
+  version: 26,
+  name: 'Add files column to mailbox table',
+  up: (db) => {
+    ensureMailboxFilesColumn(db);
+    console.log('[Migration v26] Added files column to mailbox table');
+  },
+  down: (_db) => {
+    // SQLite does not support DROP COLUMN before 3.35.0; skip rollback to prevent data loss.
+    console.warn('[Migration v26] Rollback skipped: cannot drop columns safely.');
+  },
+};
+
+/**
+ * Migration v26 -> v27: Reconcile merged schema additions after main was merged
+ * into the retained-feature branch. Existing databases may be missing one or
+ * more of the schema changes added independently on each branch.
+ */
+const migration_v27: IMigration = {
+  version: 27,
+  name: 'Reconcile merged schema additions',
+  up: (db) => {
+    ensureTeamSessionModeColumn(db);
+    ensureTurnSnapshotTables(db);
+    ensureCronJobDescriptionColumn(db);
+    ensureMailboxFilesColumn(db);
+    ensureAcpSessionTable(db);
+    console.log('[Migration v27] Reconciled schema additions from both branch lineages');
+  },
+  down: (_db) => {
+    console.warn('[Migration v27] Rollback skipped: reconciliation migration is intentionally one-way.');
   },
 };
 
@@ -1256,6 +1303,7 @@ export const ALL_MIGRATIONS: IMigration[] = [
   migration_v7, migration_v8, migration_v9, migration_v10, migration_v11, migration_v12,
   migration_v13, migration_v14, migration_v15, migration_v16, migration_v17, migration_v18,
   migration_v19, migration_v20, migration_v21, migration_v22, migration_v23, migration_v24,
+  migration_v25, migration_v26, migration_v27,
 ];
 
 /**

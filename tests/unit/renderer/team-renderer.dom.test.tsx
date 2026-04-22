@@ -6,7 +6,7 @@
 //   - TeamPage.tsx         (doRemoveAgent / handleRemoveAgent)
 
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +33,13 @@ vi.mock('@/common', () => ({
       update: { invoke: (...args: unknown[]) => mockConversationUpdateInvoke(...args) },
       stop: { invoke: vi.fn() },
       responseStream: { on: vi.fn(() => vi.fn()), emit: vi.fn() },
+      confirmation: {
+        list: { invoke: vi.fn().mockResolvedValue([]) },
+        add: { on: vi.fn(() => vi.fn()) },
+        remove: { on: vi.fn(() => vi.fn()) },
+        update: { on: vi.fn(() => vi.fn()) },
+        confirm: { invoke: vi.fn() },
+      },
     },
     acpConversation: {
       responseStream: { on: vi.fn(() => vi.fn()), emit: vi.fn() },
@@ -98,10 +105,6 @@ vi.mock('@/renderer/styles/colors', () => ({
 }));
 
 // Stub child components not under test
-vi.mock('@/renderer/pages/team/components/AddAgentModal', () => ({
-  default: () => null,
-}));
-
 vi.mock('@/renderer/pages/team/components/AgentStatusBadge', () => ({
   default: ({ status }: { status: string }) => React.createElement('span', { 'data-testid': 'status-badge' }, status),
 }));
@@ -127,10 +130,6 @@ vi.mock('@/renderer/pages/conversation/components/ChatLayout', () => ({
 
 vi.mock('@/renderer/pages/conversation/components/ChatSider', () => ({
   default: () => React.createElement('div', { 'data-testid': 'chat-sider' }),
-}));
-
-vi.mock('@/renderer/pages/team/components/TeamConfirmOverlay', () => ({
-  default: () => null,
 }));
 
 vi.mock('@/renderer/pages/team/components/TeamChatView', () => ({
@@ -200,7 +199,7 @@ function makeAgents(): TeamAgent[] {
     {
       slotId: 'slot-lead',
       conversationId: 'conv-lead',
-      role: 'lead',
+      role: 'leader',
       agentType: 'acp',
       agentName: 'Leader',
       conversationType: 'acp',
@@ -222,7 +221,7 @@ function makeTeam(): TTeam {
   return {
     id: 'team-1',
     name: 'Test Team',
-    leadAgentId: 'slot-lead',
+    leaderAgentId: 'slot-lead',
     agents: makeAgents(),
     createdAt: 1,
     updatedAt: 1,
@@ -294,6 +293,86 @@ describe('TeamTabsContext', () => {
     expect(contextValue).not.toBeNull();
     expect(contextValue!.removeAgent).toBeUndefined();
   });
+
+  it('restores teammate tab order from localStorage while keeping the leader first', async () => {
+    localStorage.setItem('team-agent-order-team-1', JSON.stringify(['slot-member-2', 'slot-member']));
+
+    const agents: TeamAgent[] = [
+      ...makeAgents(),
+      {
+        slotId: 'slot-member-2',
+        conversationId: 'conv-member-2',
+        role: 'teammate',
+        agentType: 'acp',
+        agentName: 'Worker 2',
+        conversationType: 'acp',
+        status: 'idle',
+      },
+    ];
+
+    const TeamTabs = (await import('@renderer/pages/team/components/TeamTabs')).default;
+
+    render(
+      React.createElement(
+        TeamTabsProvider,
+        {
+          agents,
+          statusMap: new Map(),
+          defaultActiveSlotId: 'slot-lead',
+          teamId: 'team-1',
+        },
+        React.createElement(TeamTabs, {})
+      )
+    );
+
+    expect(screen.getAllByTestId('agent-identity').map((element) => element.textContent)).toEqual([
+      'Leader',
+      'Worker 2',
+      'Worker',
+    ]);
+  });
+
+  it('persists reordered teammate tabs to localStorage', () => {
+    let contextValue: ReturnType<typeof useTeamTabs> | null = null;
+
+    const Consumer = () => {
+      contextValue = useTeamTabs();
+      return null;
+    };
+
+    render(
+      React.createElement(
+        TeamTabsProvider,
+        {
+          agents: [
+            ...makeAgents(),
+            {
+              slotId: 'slot-member-2',
+              conversationId: 'conv-member-2',
+              role: 'teammate',
+              agentType: 'acp',
+              agentName: 'Worker 2',
+              conversationType: 'acp',
+              status: 'idle',
+            },
+          ],
+          statusMap: new Map(),
+          defaultActiveSlotId: 'slot-lead',
+          teamId: 'team-1',
+        },
+        React.createElement(Consumer)
+      )
+    );
+
+    act(() => {
+      contextValue!.reorderAgents('slot-member-2', 'slot-member');
+    });
+
+    expect(JSON.parse(localStorage.getItem('team-agent-order-team-1') ?? '[]')).toEqual([
+      'slot-member-2',
+      'slot-member',
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -310,7 +389,7 @@ describe('TeamTabs close button', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders close button for non-lead agents when removeAgent is provided', async () => {
+  it('renders close button for non-leader agents when removeAgent is provided', async () => {
     const mockRemove = vi.fn().mockResolvedValue(undefined);
     const TeamTabs = (await import('@renderer/pages/team/components/TeamTabs')).default;
 
@@ -324,7 +403,7 @@ describe('TeamTabs close button', () => {
           teamId: 'team-1',
           removeAgent: mockRemove,
         },
-        React.createElement(TeamTabs, { onAddAgent: vi.fn() })
+        React.createElement(TeamTabs, {})
       )
     );
 
@@ -332,7 +411,7 @@ describe('TeamTabs close button', () => {
     expect(closeIcons.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('does not render close button for lead agent', async () => {
+  it('does not render close button for leader agent', async () => {
     const mockRemove = vi.fn().mockResolvedValue(undefined);
     const TeamTabs = (await import('@renderer/pages/team/components/TeamTabs')).default;
 
@@ -346,7 +425,7 @@ describe('TeamTabs close button', () => {
           teamId: 'team-1',
           removeAgent: mockRemove,
         },
-        React.createElement(TeamTabs, { onAddAgent: vi.fn() })
+        React.createElement(TeamTabs, {})
       )
     );
 
@@ -354,7 +433,7 @@ describe('TeamTabs close button', () => {
     expect(identities.length).toBe(2);
 
     const closeIcons = screen.getAllByTestId('close-icon');
-    expect(closeIcons.length).toBe(1); // only the non-lead member
+    expect(closeIcons.length).toBe(1); // only the non-leader member
   });
 
   it('calls removeAgent when close button is clicked', async () => {
@@ -371,7 +450,7 @@ describe('TeamTabs close button', () => {
           teamId: 'team-1',
           removeAgent: mockRemove,
         },
-        React.createElement(TeamTabs, { onAddAgent: vi.fn() })
+        React.createElement(TeamTabs, {})
       )
     );
 
@@ -395,7 +474,7 @@ describe('TeamTabs close button', () => {
           defaultActiveSlotId: 'slot-lead',
           teamId: 'team-1',
         },
-        React.createElement(TeamTabs, { onAddAgent: vi.fn() })
+        React.createElement(TeamTabs, {})
       )
     );
 
@@ -419,12 +498,12 @@ describe('TeamPage remove agent', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders remove button for non-lead agent in chat header', async () => {
+  it('renders remove button for non-leader agent in chat header', async () => {
     const TeamPage = (await import('@renderer/pages/team/TeamPage')).default;
 
     render(React.createElement(TeamPage, { team: makeTeam() }));
 
-    // The AgentChatSlot renders CloseSmall for non-lead agents
+    // The AgentChatSlot renders CloseSmall for non-leader agents
     const closeIcons = screen.getAllByTestId('close-icon');
     expect(closeIcons.length).toBeGreaterThanOrEqual(1);
   });

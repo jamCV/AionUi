@@ -18,6 +18,8 @@ vi.mock('@office-ai/platform', () => ({
 vi.mock('@process/utils/initStorage', () => ({
   getSkillsDir: () => '/mock/skills',
   getBuiltinSkillsDir: () => '/mock/skills/_builtin',
+  getBuiltinSkillsCopyDir: () => '/mock/builtin-skills',
+  getAutoSkillsDir: () => '/mock/builtin-skills/_builtin',
   getSystemDir: () => ({
     workDir: '/mock/work',
     cacheDir: '/mock/cache',
@@ -39,6 +41,7 @@ vi.mock('@/common', () => ({
       readFile: { provider: vi.fn() },
       readFileBuffer: { provider: vi.fn() },
       createTempFile: { provider: vi.fn() },
+      createUploadFile: { provider: vi.fn() },
       writeFile: { provider: vi.fn() },
       createZip: { provider: vi.fn() },
       cancelZip: { provider: vi.fn() },
@@ -55,6 +58,7 @@ vi.mock('@/common', () => ({
       writeAssistantSkill: { provider: vi.fn() },
       deleteAssistantSkill: { provider: vi.fn() },
       listAvailableSkills: { provider: vi.fn() },
+      listBuiltinAutoSkills: { provider: vi.fn() },
       readSkillInfo: { provider: vi.fn() },
       importSkill: { provider: vi.fn() },
       scanForSkills: { provider: vi.fn() },
