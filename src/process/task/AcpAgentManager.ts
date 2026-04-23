@@ -86,6 +86,31 @@ type BufferedStreamTextMessage = {
 
 type CustomAgentLaunchConfig = Pick<AcpBackendConfig, 'id' | 'name' | 'defaultCliPath' | 'acpArgs' | 'env'>;
 
+function resolveCachedCurrentModel(
+  existing:
+    | {
+        currentModelId?: string | null;
+        currentModelLabel?: string | null;
+      }
+    | undefined,
+  modelInfo: AcpModelInfo
+): { currentModelId: string | null; currentModelLabel: string | null } {
+  if (existing?.currentModelId) {
+    const existingMatch = modelInfo.availableModels.find((model) => model.id === existing.currentModelId);
+    if (existingMatch) {
+      return {
+        currentModelId: existing.currentModelId,
+        currentModelLabel: existingMatch.label,
+      };
+    }
+  }
+
+  return {
+    currentModelId: modelInfo.currentModelId,
+    currentModelLabel: modelInfo.currentModelLabel,
+  };
+}
+
 class AcpAgentManager extends BaseAgentManager<AcpAgentManagerData, AcpPermissionOption> {
   workspace: string;
   agent: AcpAgentV2;
@@ -1607,11 +1632,12 @@ ${collectedResponses.join('\n')}`;
   private async cacheModelList(modelInfo: AcpModelInfo): Promise<void> {
     try {
       const cached = (await ProcessConfig.get('acp.cachedModels')) || {};
+      const nextCurrentModel = resolveCachedCurrentModel(cached[this.options.backend], modelInfo);
       const nextCachedInfo = {
         ...modelInfo,
-        // Keep the original default from initial session, not from user switches
-        currentModelId: cached[this.options.backend]?.currentModelId ?? modelInfo.currentModelId,
-        currentModelLabel: cached[this.options.backend]?.currentModelLabel ?? modelInfo.currentModelLabel,
+        // Keep the original default only while it remains valid for this backend.
+        currentModelId: nextCurrentModel.currentModelId,
+        currentModelLabel: nextCurrentModel.currentModelLabel,
       };
       // Cache the available model list only. Don't overwrite currentModelId from
       // session-level switches — that should not affect the Guid page default.

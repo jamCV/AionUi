@@ -49,6 +49,31 @@ const BACKEND_LOGIN_ARGS: Record<string, string[] | undefined> = {
 
 const LOGIN_TIMEOUT_MS = 70_000;
 
+function resolveCachedCurrentModel(
+  existing:
+    | {
+        currentModelId?: string | null;
+        currentModelLabel?: string | null;
+      }
+    | undefined,
+  modelInfo: AcpModelInfo
+): { currentModelId: string | null; currentModelLabel: string | null } {
+  if (existing?.currentModelId) {
+    const existingMatch = modelInfo.availableModels.find((model) => model.id === existing.currentModelId);
+    if (existingMatch) {
+      return {
+        currentModelId: existing.currentModelId,
+        currentModelLabel: existingMatch.label,
+      };
+    }
+  }
+
+  return {
+    currentModelId: modelInfo.currentModelId,
+    currentModelLabel: modelInfo.currentModelLabel,
+  };
+}
+
 /**
  * Refresh backend credentials by running the backend CLI login command.
  * Will be replaced by `authCommand + args` config when Agent Hub lands (PR #2349).
@@ -877,13 +902,14 @@ export class AcpAgentV2 {
       if (modelInfo && modelInfo.availableModels && modelInfo.availableModels.length > 0) {
         const cached = (await ProcessConfig.get('acp.cachedModels')) || {};
         const existing = cached[backend];
+        const nextCurrentModel = resolveCachedCurrentModel(existing, modelInfo);
         await ProcessConfig.set('acp.cachedModels', {
           ...cached,
           [backend]: {
             ...modelInfo,
-            // Preserve the original default model from the first session
-            currentModelId: existing?.currentModelId ?? modelInfo.currentModelId,
-            currentModelLabel: existing?.currentModelLabel ?? modelInfo.currentModelLabel,
+            // Preserve the original default model only while it remains valid.
+            currentModelId: nextCurrentModel.currentModelId,
+            currentModelLabel: nextCurrentModel.currentModelLabel,
           },
         });
       }
