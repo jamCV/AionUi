@@ -53,8 +53,32 @@ export class ConfigTracker {
     }
   }
 
+  private reconcileDesiredModelId(): void {
+    if (!this.desiredModelId || this.availableModels.length === 0) {
+      return;
+    }
+
+    const directMatch = this.availableModels.find((model) => model.modelId === this.desiredModelId);
+    if (directMatch) {
+      if (this.currentModelId === directMatch.modelId) {
+        this.desiredModelId = null;
+      }
+      return;
+    }
+
+    const labelMatches = this.availableModels.filter((model) => model.name === this.desiredModelId);
+    if (labelMatches.length === 1) {
+      const normalizedModelId = labelMatches[0].modelId;
+      this.desiredModelId = this.currentModelId === normalizedModelId ? null : normalizedModelId;
+      return;
+    }
+
+    this.desiredModelId = null;
+  }
+
   setDesiredModel(modelId: string): void {
     this.desiredModelId = modelId;
+    this.reconcileDesiredModelId();
   }
 
   setCurrentModel(modelId: string): void {
@@ -90,6 +114,7 @@ export class ConfigTracker {
     if (result.availableModes) this.availableModes = result.availableModes;
     if (result.configOptions) this.currentConfigOptions = result.configOptions;
     if (result.availableCommands) this.availableCommands = result.availableCommands;
+    this.reconcileDesiredModelId();
   }
 
   /**
