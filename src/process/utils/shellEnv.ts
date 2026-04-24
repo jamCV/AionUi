@@ -15,12 +15,13 @@
 
 import { getPlatformServices } from '@/common/platform';
 import { execFile, execFileSync, spawn } from 'child_process';
-import { accessSync, existsSync, readdirSync } from 'fs';
+import { accessSync, closeSync, existsSync, openSync, readSync, readdirSync, statSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
 /** Enable ACP performance diagnostics via ACP_PERF=1 */
 const PERF_LOG = process.env.ACP_PERF === '1';
+const MIN_VALID_WINDOWS_BUN_SIZE_BYTES = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Bundled bun runtime
@@ -31,14 +32,86 @@ const PERF_LOG = process.env.ACP_PERF === '1';
  * Returns the path to `resources/bundled-bun/<platform>-<arch>/` which contains
  * the bun executable. Returns null if the directory doesn't exist.
  */
+function getBundledBunBinaryName(): string {
+  return process.platform === 'win32' ? 'bun.exe' : 'bun';
+}
+
+function isLikelyValidBundledBunBinary(binaryPath: string): boolean {
+  if (!existsSync(binaryPath)) {
+    return false;
+  }
+
+  if (process.platform !== 'win32') {
+    return true;
+  }
+
+  try {
+    if (statSync(binaryPath).size < MIN_VALID_WINDOWS_BUN_SIZE_BYTES) {
+      return false;
+    }
+
+    const fd = openSync(binaryPath, 'r');
+    try {
+      const header = Buffer.alloc(2);
+      const bytesRead = readSync(fd, header, 0, header.length, 0);
+      return bytesRead === header.length && header[0] === 0x4d && header[1] === 0x5a;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+function getBundledBunCacheRoot(): string {
+  const custom = process.env.AIONUI_BUN_CACHE_DIR;
+  if (custom && custom.trim()) {
+    return path.resolve(custom.trim());
+  }
+
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(localAppData, 'AionUi', 'cache', 'bundled-bun');
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches', 'AionUi', 'bundled-bun');
+  }
+
+  const xdgCacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
+  return path.join(xdgCacheHome, 'AionUi', 'bundled-bun');
+}
+
+function getBundledBunSearchRoots(): string[] {
+  const roots = new Set<string>();
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+
+  if (getPlatformServices().paths.isPackaged() && resourcesPath) {
+    roots.add(resourcesPath);
+    // Local win-unpacked/dev packaging fallback: walk back to repo resources.
+    roots.add(path.resolve(resourcesPath, '..', '..', '..', 'resources'));
+  }
+
+  roots.add(path.join(process.cwd(), 'resources'));
+  roots.add(getBundledBunCacheRoot());
+
+  return [...roots];
+}
+
 export function getBundledBunDir(): string | null {
-  const resourcesPath = getPlatformServices().paths.isPackaged()
-    ? process.resourcesPath
-    : path.join(process.cwd(), 'resources');
   const platform = process.platform === 'win32' ? 'win32' : process.platform;
   const arch = process.arch;
-  const bunDir = path.join(resourcesPath, 'bundled-bun', `${platform}-${arch}`);
-  return existsSync(bunDir) ? bunDir : null;
+  const runtimeKey = `${platform}-${arch}`;
+  const binaryName = getBundledBunBinaryName();
+
+  for (const root of getBundledBunSearchRoots()) {
+    const bunDir = path.join(root, 'bundled-bun', runtimeKey);
+    if (isLikelyValidBundledBunBinary(path.join(bunDir, binaryName))) {
+      return bunDir;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -572,10 +645,10 @@ export function normalizeNpxArgsForBundledBun(args: string[]): string[] {
 export function resolveNpxPath(_env: Record<string, string | undefined>): string {
   const bundledBunDir = getBundledBunDir();
   if (bundledBunDir) {
-    return path.join(bundledBunDir, process.platform === 'win32' ? 'bun.exe' : 'bun');
+    return path.join(bundledBunDir, getBundledBunBinaryName());
   }
 
-  return process.platform === 'win32' ? 'bun.exe' : 'bun';
+  return getBundledBunBinaryName();
 }
 
 /**

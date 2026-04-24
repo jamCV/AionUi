@@ -1,12 +1,46 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import prepareBundledBun = require('../../scripts/prepareBundledBun.js');
+type PrepareBundledBunResult = {
+  prepared: boolean;
+  sourceType?: string;
+  reason?: string;
+};
+
+type PrepareBundledBun = (() => PrepareBundledBunResult) & {
+  _test: {
+    isCachedRuntimeValid: (cacheRuntimeDir: string, platform: string, arch: string, version: string) => boolean;
+    isValidRuntimeBinary: (filePath: string, platform: string) => boolean;
+  };
+};
 
 function getRequiredRuntimeFileName(): string {
   return process.platform === 'win32' ? 'bun.exe' : 'bun';
+}
+
+function writeRuntimeBinary(filePath: string, kind: 'valid' | 'invalid'): void {
+  if (process.platform !== 'win32') {
+    fs.writeFileSync(filePath, kind === 'valid' ? '#!/usr/bin/env bun\n' : 'not-bun\n', 'utf8');
+    return;
+  }
+
+  if (kind === 'valid') {
+    const payload = Buffer.alloc(2 * 1024 * 1024);
+    payload[0] = 0x4d;
+    payload[1] = 0x5a;
+    fs.writeFileSync(filePath, payload);
+    return;
+  }
+
+  fs.writeFileSync(filePath, 'bun wrapper', 'utf8');
+}
+
+async function loadPrepareBundledBun(): Promise<PrepareBundledBun> {
+  vi.resetModules();
+  const mod = await import('../../scripts/prepareBundledBun.js');
+  return (mod.default ?? mod) as unknown as PrepareBundledBun;
 }
 
 describe('prepareBundledBun', () => {
@@ -20,6 +54,10 @@ describe('prepareBundledBun', () => {
   let tempRoot: string | null = null;
   let targetBackupDir: string | null = null;
   let targetExisted = false;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
 
   afterEach(() => {
     process.env.AIONUI_BUN_CACHE_DIR = originalCacheDir;
@@ -47,7 +85,9 @@ describe('prepareBundledBun', () => {
     targetExisted = false;
   });
 
-  it('copies bundled bun from cache when cache metadata is valid', () => {
+  it('copies bundled bun from cache when cache metadata is valid', async () => {
+    const prepareBundledBun = await loadPrepareBundledBun();
+
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aionui-bun-test-'));
 
     targetExisted = fs.existsSync(targetDir);
@@ -63,7 +103,7 @@ describe('prepareBundledBun', () => {
 
     const runtimeFileName = getRequiredRuntimeFileName();
     const runtimeFilePath = path.join(cacheRuntimeDir, runtimeFileName);
-    fs.writeFileSync(runtimeFilePath, 'fake-bun-binary', 'utf8');
+    writeRuntimeBinary(runtimeFilePath, 'valid');
 
     const cacheMeta = {
       platform: process.platform,
@@ -105,5 +145,43 @@ describe('prepareBundledBun', () => {
     expect(manifest.files).toContain(runtimeFileName);
     expect(manifest.cacheDir).toBe(cacheRuntimeDir);
     expect(manifest.cacheMeta?.sourceType).toBe('download');
+  });
+
+  it('rejects an invalid cached bun.exe on Windows', async () => {
+    if (process.platform !== 'win32') return;
+
+    const prepareBundledBun = await loadPrepareBundledBun();
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aionui-bun-test-'));
+
+    const cacheRoot = path.join(tempRoot, 'cache-root');
+    const version = 'test-invalid-cache-version';
+    const cacheRuntimeDir = path.join(cacheRoot, version, runtimeKey);
+    fs.mkdirSync(cacheRuntimeDir, { recursive: true });
+
+    const runtimeFileName = getRequiredRuntimeFileName();
+    writeRuntimeBinary(path.join(cacheRuntimeDir, runtimeFileName), 'invalid');
+
+    const cacheMeta = {
+      platform: process.platform,
+      arch: process.arch,
+      version,
+      sourceType: 'download',
+      source: {
+        url: 'https://example.com/bun.zip',
+        asset: 'bun-test.zip',
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(cacheRuntimeDir, 'runtime-meta.json'), JSON.stringify(cacheMeta, null, 2), 'utf8');
+
+    process.env.AIONUI_BUN_CACHE_DIR = cacheRoot;
+    process.env.AIONUI_BUN_VERSION = version;
+
+    expect(
+      prepareBundledBun._test.isValidRuntimeBinary(path.join(cacheRuntimeDir, runtimeFileName), process.platform)
+    ).toBe(false);
+    expect(prepareBundledBun._test.isCachedRuntimeValid(cacheRuntimeDir, process.platform, process.arch, version)).toBe(
+      false
+    );
   });
 });

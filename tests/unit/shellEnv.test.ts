@@ -407,6 +407,8 @@ describe('getEnhancedEnv Windows extra paths (cross-platform mock)', () => {
 
 describe('resolveNpxPath', () => {
   const originalPlatform = process.platform;
+  const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const runtimeKey = `win32-${process.arch}`;
 
   beforeEach(() => {
     vi.resetModules();
@@ -414,15 +416,40 @@ describe('resolveNpxPath', () => {
 
   afterEach(() => {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
+    Object.defineProperty(process, 'resourcesPath', { value: originalResourcesPath, configurable: true });
+    mocks.isPackaged.mockReturnValue(false);
   });
 
   it('prefers the bundled bun binary on Windows', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
+    const bundledBun = path.join(process.cwd(), 'resources', 'bundled-bun', runtimeKey, 'bun.exe');
+
+    vi.doMock('fs', async () => {
+      const actual = await vi.importActual<typeof import('fs')>('fs');
+      return {
+        ...actual,
+        existsSync: vi.fn((candidate: string) => candidate === bundledBun),
+        statSync: vi.fn(() => ({ size: 2 * 1024 * 1024 })),
+        openSync: vi.fn(() => 1),
+        readSync: vi.fn((_fd: number, buffer: Buffer) => {
+          buffer[0] = 0x4d;
+          buffer[1] = 0x5a;
+          return 2;
+        }),
+        closeSync: vi.fn(),
+      };
+    });
+
+    vi.doMock('child_process', () => ({
+      execFileSync: vi.fn(),
+      execFile: vi.fn(),
+      spawn: vi.fn(),
+    }));
 
     const { resolveNpxPath } = await import('@process/utils/shellEnv');
     const result = resolveNpxPath({ PATH: '/tooling' });
 
-    expect(result.endsWith('bun.exe')).toBe(true);
+    expect(result).toBe(bundledBun);
   });
 
   it('falls back to bun.exe when bundled bun is unavailable on Windows', async () => {
@@ -444,6 +471,81 @@ describe('resolveNpxPath', () => {
     const { resolveNpxPath } = await import('@process/utils/shellEnv');
 
     expect(resolveNpxPath({ PATH: '/tooling' })).toBe('bun.exe');
+  });
+
+  it('ignores an invalid bundled bun binary on Windows', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const invalidBundledBun = path.join(process.cwd(), 'resources', 'bundled-bun', runtimeKey, 'bun.exe');
+
+    vi.doMock('fs', async () => {
+      const actual = await vi.importActual<typeof import('fs')>('fs');
+      return {
+        ...actual,
+        existsSync: vi.fn((candidate: string) => candidate === invalidBundledBun),
+        statSync: vi.fn(() => ({ size: 470 })),
+        openSync: vi.fn(() => 1),
+        readSync: vi.fn((_fd: number, buffer: Buffer) => {
+          buffer[0] = 0x40;
+          buffer[1] = 0x65;
+          return 2;
+        }),
+        closeSync: vi.fn(),
+      };
+    });
+
+    vi.doMock('child_process', () => ({
+      execFileSync: vi.fn(),
+      execFile: vi.fn(),
+      spawn: vi.fn(),
+    }));
+
+    const { resolveNpxPath } = await import('@process/utils/shellEnv');
+
+    expect(resolveNpxPath({ PATH: '/tooling' })).toBe('bun.exe');
+  });
+
+  it('falls back to repo resources when packaged resources are missing bundled bun', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    Object.defineProperty(process, 'resourcesPath', {
+      value: path.join('E:', 'GithubProj', 'AionUi-main-jam-realign', 'out', 'win-unpacked', 'resources'),
+      configurable: true,
+    });
+    mocks.isPackaged.mockReturnValue(true);
+
+    const repoBundledBun = path.join(
+      'E:',
+      'GithubProj',
+      'AionUi-main-jam-realign',
+      'resources',
+      'bundled-bun',
+      `win32-${process.arch}`,
+      'bun.exe'
+    );
+
+    vi.doMock('fs', async () => {
+      const actual = await vi.importActual<typeof import('fs')>('fs');
+      return {
+        ...actual,
+        existsSync: vi.fn((candidate: string) => candidate === repoBundledBun),
+        statSync: vi.fn(() => ({ size: 2 * 1024 * 1024 })),
+        openSync: vi.fn(() => 1),
+        readSync: vi.fn((_fd: number, buffer: Buffer) => {
+          buffer[0] = 0x4d;
+          buffer[1] = 0x5a;
+          return 2;
+        }),
+        closeSync: vi.fn(),
+      };
+    });
+
+    vi.doMock('child_process', () => ({
+      execFileSync: vi.fn(),
+      execFile: vi.fn(),
+    }));
+
+    const { resolveNpxPath } = await import('@process/utils/shellEnv');
+
+    expect(resolveNpxPath({ PATH: '/tooling' })).toBe(repoBundledBun);
   });
 });
 
