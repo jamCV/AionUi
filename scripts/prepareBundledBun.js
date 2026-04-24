@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 
 const CACHE_META_FILE = 'runtime-meta.json';
+const MIN_VALID_WINDOWS_BUN_SIZE_BYTES = 1024 * 1024;
 
 function ensureDirectory(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -36,6 +37,28 @@ function writeJson(filePath, payload) {
 
 function getRequiredRuntimeFiles(platform) {
   return [platform === 'win32' ? 'bun.exe' : 'bun'];
+}
+
+function isValidRuntimeBinary(filePath, platform) {
+  if (!fs.existsSync(filePath)) return false;
+  if (platform !== 'win32') return true;
+
+  try {
+    if (fs.statSync(filePath).size < MIN_VALID_WINDOWS_BUN_SIZE_BYTES) {
+      return false;
+    }
+
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const header = Buffer.alloc(2);
+      const bytesRead = fs.readSync(fd, header, 0, header.length, 0);
+      return bytesRead === header.length && header[0] === 0x4d && header[1] === 0x5a;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
 }
 
 function getRuntimeVersion() {
@@ -154,7 +177,9 @@ function listDirectoriesRecursive(dirPath, acc = []) {
 function findRuntimeDirectory(rootDir, requiredFiles) {
   const candidateDirs = [rootDir, ...listDirectoriesRecursive(rootDir)];
   for (const candidate of candidateDirs) {
-    const allPresent = requiredFiles.every((fileName) => fs.existsSync(path.join(candidate, fileName)));
+    const allPresent = requiredFiles.every((fileName) =>
+      isValidRuntimeBinary(path.join(candidate, fileName), process.platform)
+    );
     if (allPresent) {
       return candidate;
     }
@@ -183,7 +208,7 @@ function writeCacheMeta(cacheRuntimeDir, meta) {
 
 function isCachedRuntimeValid(cacheRuntimeDir, platform, arch, version) {
   const requiredFiles = getRequiredRuntimeFiles(platform);
-  const filesOk = requiredFiles.every((fileName) => fs.existsSync(path.join(cacheRuntimeDir, fileName)));
+  const filesOk = requiredFiles.every((fileName) => isValidRuntimeBinary(path.join(cacheRuntimeDir, fileName), platform));
   if (!filesOk) return false;
 
   const meta = readCacheMeta(cacheRuntimeDir);
@@ -343,5 +368,10 @@ function prepareBundledBun() {
     return { prepared: false, reason: 'error' };
   }
 }
+
+prepareBundledBun._test = {
+  isCachedRuntimeValid,
+  isValidRuntimeBinary,
+};
 
 module.exports = prepareBundledBun;
