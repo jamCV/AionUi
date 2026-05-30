@@ -195,7 +195,7 @@ describe('updateBridge allowlist includes CDN host', () => {
 
       const result = await handler({
         url: 'https://static.aionui.com/releases/1.9.22/AionUi-1.9.22-mac-arm64.dmg',
-        fileName: 'AionUi-1.9.22-mac-arm64.dmg',
+        file_name: 'AionUi-1.9.22-mac-arm64.dmg',
       });
 
       expect(result.success).toBe(true);
@@ -221,7 +221,7 @@ describe('updateBridge allowlist includes CDN host', () => {
 
     const result = await handler({
       url: 'https://evil.example.com/fake.dmg',
-      fileName: 'fake.dmg',
+      file_name: 'fake.dmg',
     });
 
     // Download is refused before any network I/O; exact error text comes from i18n and isn't asserted here.

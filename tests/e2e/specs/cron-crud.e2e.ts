@@ -12,8 +12,15 @@
 import { test, expect } from '../fixtures';
 import { invokeBridge } from '../helpers/bridge';
 import { goToGuid } from '../helpers/navigation';
-import { selectAgent, sendMessageFromGuid, waitForSessionActive, waitForAiReply, deleteConversation } from '../helpers';
-import { agentPillByBackend } from '../helpers/selectors';
+import {
+  AGENT_PILL,
+  selectAgent,
+  sendMessageFromGuid,
+  waitForSessionActive,
+  waitForAiReply,
+  deleteConversation,
+  startAutoApprovePermissionMessages,
+} from '../helpers';
 
 interface CronJob {
   id: string;
@@ -22,7 +29,31 @@ interface CronJob {
   enabled: boolean;
   schedule: { kind: string; expr?: string; description?: string };
   target: { payload: { kind: string; text: string }; executionMode?: string };
-  metadata: { conversationId: string; [key: string]: unknown };
+  metadata: { conversation_id: string; [key: string]: unknown };
+}
+
+async function pickAvailableBackend(page: import('@playwright/test').Page): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const visible = await page
+      .locator(AGENT_PILL)
+      .first()
+      .waitFor({ state: 'visible', timeout: 45_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (visible) {
+      const backends = await page
+        .locator(AGENT_PILL)
+        .evaluateAll((els) => els.map((el) => el.getAttribute('data-agent-backend')).filter(Boolean));
+      const preferred = ['gemini', 'claude', 'codex', 'aionrs'].find((backend) => backends.includes(backend));
+      const found = preferred ?? backends[0] ?? null;
+      if (found) return found;
+    }
+    if (attempt === 0) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await goToGuid(page);
+    }
+  }
+  return null;
 }
 
 // ── Bridge helpers ──────────────────────────────────────────────────────────
@@ -32,48 +63,11 @@ async function listCronJobs(page: import('@playwright/test').Page): Promise<Cron
 }
 
 async function getCronJob(page: import('@playwright/test').Page, jobId: string): Promise<CronJob | null> {
-  return invokeBridge<CronJob | null>(page, 'cron.get-job', { jobId }, 10_000);
+  return invokeBridge<CronJob | null>(page, 'cron.get-job', { job_id: jobId }, 10_000);
 }
 
 async function removeCronJob(page: import('@playwright/test').Page, jobId: string): Promise<void> {
-  return invokeBridge<void>(page, 'cron.remove-job', { jobId }, 10_000);
-}
-
-// ── Confirmation auto-approve ──────────────────────────────────────────────
-
-/**
- * Start a background loop that auto-clicks "Always Allow" on any
- * confirmation dialog (e.g., Activate Skill: cron).
- * Returns a cleanup function to stop the loop.
- */
-function startAutoApproveConfirmations(page: import('@playwright/test').Page): () => void {
-  let running = true;
-
-  const loop = async () => {
-    while (running) {
-      try {
-        // ConversationChatConfirm renders option buttons as divs with
-        // shortcut badge + label. The "Always Allow" option has shortcut "A".
-        // We look for any confirmation option containing "始终允许" or "Always"
-        // and click it. Fallback: click the first option (Enter = allow once).
-        const alwaysBtn = page
-          .locator('div.cursor-pointer')
-          .filter({ hasText: /始终允许|Always allow|proceed_always/ })
-          .first();
-        if (await alwaysBtn.isVisible().catch(() => false)) {
-          await alwaysBtn.click().catch(() => {});
-        }
-      } catch {
-        // page may be navigating
-      }
-      await page.waitForTimeout(1_000).catch(() => {});
-    }
-  };
-
-  void loop();
-  return () => {
-    running = false;
-  };
+  return invokeBridge<void>(page, 'cron.remove-job', { job_id: jobId }, 10_000);
 }
 
 // ── Conversation helpers ───────────────────────────────────────────────────
@@ -97,7 +91,7 @@ async function waitForCronJobCreated(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const jobs = await listCronJobs(page);
-    const found = jobs.find((j) => j.metadata.conversationId === conversationId);
+    const found = jobs.find((j) => j.metadata.conversation_id === conversationId);
     if (found) return found;
     await page.waitForTimeout(2_000);
   }
@@ -171,19 +165,18 @@ test.describe('Cron via AI conversation', () => {
   });
 
   test('create scheduled task via conversation, modify it, then delete — conversations preserved', async ({ page }) => {
-    // ── Step 1: Navigate to guid and select Gemini agent ──
+    // ── Step 1: Navigate to guid and select an available ACP-capable agent ──
     await goToGuid(page);
+    await page
+      .waitForFunction(() => (document.body.textContent?.length ?? 0) > 200, { timeout: 45_000 })
+      .catch(() => {});
 
-    const pill = page.locator(agentPillByBackend('gemini'));
-    const visible = await pill
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (!visible) {
-      test.skip(true, 'Gemini agent not available');
+    const backend = await pickAvailableBackend(page);
+    if (!backend) {
+      test.skip(true, 'No usable agent available on guid page');
       return;
     }
-    await selectAgent(page, 'gemini');
+    await selectAgent(page, backend);
 
     // ── Step 2: Send message to create a scheduled task ──
     conversationId = await sendMessageFromGuid(
@@ -193,7 +186,7 @@ test.describe('Cron via AI conversation', () => {
     expect(conversationId).toBeTruthy();
 
     // Start auto-approving skill activation confirmations
-    stopAutoApprove = startAutoApproveConfirmations(page);
+    stopAutoApprove = startAutoApprovePermissionMessages(page);
 
     // Wait for agent session to be active
     await waitForSessionActive(page, 120_000);
@@ -258,7 +251,16 @@ test.describe('Cron via AI conversation', () => {
 
     // Re-locate historyColumn on the new page
     const historyColumnAfter = page.locator('[data-testid="task-detail-history-column"]');
-    const conversationCountAfter = await historyColumnAfter.locator('.cursor-pointer').count();
+    const conversationCountAfter = await expect
+      .poll(
+        async () => {
+          const entries = historyColumnAfter.locator('.cursor-pointer');
+          return entries.count();
+        },
+        { timeout: 15_000, message: 'Waiting for conversation history to reload after cron update' }
+      )
+      .toBeGreaterThanOrEqual(conversationCountBefore)
+      .then(async () => historyColumnAfter.locator('.cursor-pointer').count());
     expect(conversationCountAfter).toBe(conversationCountBefore);
 
     // ── Step 10: Verify job ID preserved (same job, not delete+recreate) ──
@@ -299,17 +301,16 @@ test.describe('Cron via AI conversation', () => {
 
   test('AI creates task in conversation — sidebar shows task with child conversation', async ({ page }) => {
     await goToGuid(page);
+    await page
+      .waitForFunction(() => (document.body.textContent?.length ?? 0) > 200, { timeout: 45_000 })
+      .catch(() => {});
 
-    const pill = page.locator(agentPillByBackend('gemini'));
-    const visible = await pill
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (!visible) {
-      test.skip(true, 'Gemini agent not available');
+    const backend = await pickAvailableBackend(page);
+    if (!backend) {
+      test.skip(true, 'No usable agent available on guid page');
       return;
     }
-    await selectAgent(page, 'gemini');
+    await selectAgent(page, backend);
 
     conversationId = await sendMessageFromGuid(
       page,
@@ -318,7 +319,7 @@ test.describe('Cron via AI conversation', () => {
     expect(conversationId).toBeTruthy();
 
     // Start auto-approving skill activation confirmations
-    stopAutoApprove = startAutoApproveConfirmations(page);
+    stopAutoApprove = startAutoApprovePermissionMessages(page);
 
     await waitForSessionActive(page, 120_000);
 

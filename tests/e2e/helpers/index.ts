@@ -48,6 +48,7 @@ export {
   type ChannelPluginStatus,
 } from './extensions';
 export { invokeBridge } from './bridge';
+export { httpInvoke, httpGet, httpPost, httpDelete } from './httpBridge';
 export {
   selectAgent,
   selectModel,
@@ -58,7 +59,9 @@ export {
   goToNewChat,
   runConversationCycle,
 } from './conversation';
+export { startAutoApprovePermissionMessages, waitForPermissionMessageCard } from './permissions';
 export { TEAM_SUPPORTED_BACKENDS } from './teamConfig';
+export { createTeam, ensureTeam, deleteTeam, cleanupTeamsByName } from './teamHelpers';
 export {
   goToAssistantSettings,
   openAssistantDrawer,
@@ -101,3 +104,22 @@ export {
   SKILLS_INDICATOR_COUNT,
   AGENT_BADGE,
 } from './selectors';
+export {
+  resolveAionrsBinary,
+  getAionrsTestModels,
+  resolveAionrsPreconditions,
+  createAionrsConversationViaBridge,
+  sendAionrsMessage,
+  waitForAionrsReply,
+  getAionrsConversationDB,
+  getAionrsMessages,
+  cleanupE2EAionrsConversations,
+  createTempWorkspace,
+  selectAionrsAgent,
+  selectAionrsModel,
+  selectAionrsMode,
+  attachAionrsFolder,
+  uploadAionrsFiles,
+  type TProviderWithModel,
+  type AionrsTestModels,
+} from './chatAionrs';

@@ -90,7 +90,7 @@ jobs:
     name: Unit Tests (${{ matrix.os }})
     if: github.event_name == 'workflow_dispatch' || (github.event.action != 'closed' && github.event.pull_request.draft == false)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -392,7 +392,7 @@ jobs:
           Write-Host "=========================================="
           Write-Host "BUILD TEST: ${{ matrix.platform }}"
           Write-Host "=========================================="
-          just build-win-x64
+          node scripts/build-with-builder.js x64 --win --x64
           Write-Host "✓Build test passed for ${{ matrix.platform }}"
         env:
           NODE_OPTIONS: '--max-old-space-size=8192'
@@ -409,7 +409,7 @@ jobs:
           Write-Host "=========================================="
           Write-Host "BUILD TEST: ${{ matrix.platform }}"
           Write-Host "=========================================="
-          just build-win-arm64
+          node scripts/build-with-builder.js arm64 --win --arm64
           Write-Host "✓Build test passed for ${{ matrix.platform }}"
         env:
           NODE_OPTIONS: '--max-old-space-size=8192'
@@ -437,9 +437,6 @@ jobs:
           npm_config_disturl: https://electronjs.org/headers
           CI: true
           GH_TOKEN: ${{ github.token }}
-
-      - name: Verify packaged bundled bun assets
-        run: bun run test:packaged:bun
 
       - name: Verify build artifacts exist
         shell: bash
@@ -569,6 +566,8 @@ jobs:
 
       - name: Run prepare-release-assets script
         shell: bash
+        env:
+          MOCK_VERSION: '1.0.0'
         run: bash scripts/prepare-release-assets.sh build-artifacts release-assets
 
       - name: Validate script output

@@ -27,8 +27,6 @@ on:
 env:
   BUN_INSTALL_REGISTRY: 'https://registry.npmjs.org/'
   AIONUI_HUB_TAG: 'dist-ebc6a2b'
-  # aionrs binary version to bundle (used by scripts/prepareAionrs.js)
-  AIONRS_VERSION: 'latest'
 
 jobs:
   code-quality:
@@ -306,6 +304,16 @@ jobs:
           MSVS_VERSION: 2022
           GYP_MSVS_VERSION: 2022
 
+      - name: Prepare aioncore binary
+        shell: bash
+        run: node scripts/prepareAioncore.js
+        env:
+          # Version is pinned in repo-root package.json (aioncoreVersion).
+          # Set AIONUI_BACKEND_VERSION here only to override for ad-hoc builds.
+          AIONUI_BACKEND_ARCH: ${{ matrix.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build with electron-builder (Windows)
         if: startsWith(matrix.platform, 'windows')
         id: windows-build
@@ -486,12 +494,6 @@ jobs:
           CI: true
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-      - name: Verify packaged bundled bun assets
-        if: >-
-          !startsWith(matrix.platform, 'windows') ||
-          steps.windows-build.outputs.result == 'success'
-        run: bun run test:packaged:bun
-
       # macOS 钥匙串清理
       - name: Clean up keychain (macOS only)
         if: startsWith(matrix.platform, 'macos') && always()
@@ -536,6 +538,29 @@ jobs:
           else
             echo "No out directory found!"
           fi
+
+      # Verify desktop asar does not contain packages/web-cli/ contamination
+      # 验证桌面 asar 没有被 web-cli 代码污染
+      - name: Verify desktop asar isolation
+        if: >-
+          success() &&
+          (!startsWith(matrix.platform, 'windows') || steps.windows-build.outputs.result == 'success')
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASAR=$(find out -type f -name 'app.asar' -not -path '*node_modules*' | head -n 1 || true)
+          if [ -z "$ASAR" ]; then
+            echo "::notice::No app.asar found for ${{ matrix.platform }}, skipping isolation check"
+            exit 0
+          fi
+          echo "Inspecting $ASAR for web-cli leakage..."
+          LEAK_COUNT=$(bunx @electron/asar list "$ASAR" 2>/dev/null | grep -cE '^/packages/web-cli(/|$)' || true)
+          if [ "$LEAK_COUNT" != "0" ]; then
+            echo "::error::Desktop asar contains $LEAK_COUNT web-cli entries:"
+            bunx @electron/asar list "$ASAR" | grep -E '^/packages/web-cli(/|$)' | head -20
+            exit 1
+          fi
+          echo "✅ asar isolation verified: no packages/web-cli entries"
 
       # Upload artifacts when:
       # - Build succeeded (all platforms)

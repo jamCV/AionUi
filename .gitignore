@@ -171,6 +171,9 @@ wiki/
 # Local design docs and screenshots
 desdoc/
 
+# Local kanban (协作工作簿，不入库)
+kanban/
+
 # E2E test artifacts (Playwright)
 tests/e2e/screenshots/
 tests/e2e/results/
@@ -188,13 +191,18 @@ vx.toml
 kylindoc/
 .workspace/
 lint-results.txt
+
+# Git worktrees
+.worktree/
 .worktrees/
+worktree/
+worktrees/
 
 # Superpowers brainstorm tool (runtime files, session data)
 .superpowers/
 docs/superpowers/
 resources/bundled-bun
-resources/bundled-aionrs
+resources/bundled-aioncore
 resources/hub
 
 # Server build output
